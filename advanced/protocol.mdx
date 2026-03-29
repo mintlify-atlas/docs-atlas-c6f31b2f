@@ -1,0 +1,143 @@
+---
+title: "ESPHome Native API protocol"
+description: "Binary framing and connection lifecycle of the ESPHome Native API"
+---
+
+ESPHome devices expose a TCP server on port `6053` that speaks a lightweight binary protocol. All data is exchanged as length-prefixed protobuf messages. This page covers the wire format, the connection sequence, and versioning behaviour.
+
+## Frame format
+
+Every message on the wire is wrapped in a binary frame:
+
+```
+┌──────────┬──────────────────┬──────────────────┬────────────────────────┐
+│  0x00    │ VarInt(msg_size) │ VarInt(msg_type) │ Protobuf-encoded body  │
+└──────────┴──────────────────┴──────────────────┴────────────────────────┘
+```
+
+| Field | Size | Description |
+|---|---|---|
+| `0x00` | 1 byte | Fixed zero byte; marks the start of each frame |
+| `msg_size` | 1–5 bytes (varint) | Byte length of the protobuf body |
+| `msg_type` | 1–5 bytes (varint) | Message type ID from `option (id)` in `api.proto` |
+| body | `msg_size` bytes | Protobuf-encoded message payload |
+
+Varints follow the standard protobuf encoding: each byte contributes 7 bits of the value, with the most-significant bit set on all bytes except the last.
+
+<Note>`api.proto` is the source of truth for all message type IDs. The `option (id)` annotation on each message definition is the canonical mapping from name to wire ID.</Note>
+
+## Connection lifecycle
+
+<Steps>
+  <Step title="TCP connect">
+    Open a TCP connection to the device on port `6053`. No data is exchanged at this stage.
+
+    If Noise encryption is configured on the device, the Noise handshake (`Noise_NNpsk0_25519_ChaChaPoly_SHA256`) takes place at the TCP level **before** any protobuf messages are sent. The handshake uses a pre-shared key provisioned on both sides.
+  </Step>
+
+  <Step title="Hello exchange">
+    The client sends a `HelloRequest` (type `1`) containing the client's name and API version. The device responds with a `HelloResponse` (type `2`) containing its own API version.
+
+    ```
+    Client ──── HelloRequest  (id=1) ────► Device
+    Client ◄─── HelloResponse (id=2) ──── Device
+    ```
+
+    The client checks `api_version_major` in the response. If the major version is incompatible, the connection is closed immediately — no `DisconnectRequest` is sent.
+  </Step>
+
+  <Step title="Device info">
+    After a successful Hello exchange, the client optionally requests device metadata:
+
+    ```
+    Client ──── DeviceInfoRequest  (id=9)  ────► Device
+    Client ◄─── DeviceInfoResponse (id=10) ──── Device
+    ```
+
+    `DeviceInfoResponse` contains the device name, MAC address, firmware version, compilation time, and capability flags.
+  </Step>
+
+  <Step title="Entity discovery">
+    The client requests the full list of entities exposed by the device:
+
+    ```
+    Client ──── ListEntitiesRequest (id=11) ────────────────────────► Device
+    Client ◄─── ListEntities*Response (one per entity, various IDs) ── Device
+    Client ◄─── ListEntitiesDoneResponse (id=19) ─────────────────── Device
+    ```
+
+    Each entity domain has its own response type (e.g. `ListEntitiesSensorResponse`, `ListEntitiesLightResponse`). The stream is terminated by `ListEntitiesDoneResponse`.
+  </Step>
+
+  <Step title="State subscription">
+    Once entities are known, the client subscribes to state updates:
+
+    ```
+    Client ──── SubscribeStatesRequest (id=20) ─────────────────────► Device
+    Client ◄─── *StateResponse (streamed as values change) ─────────── Device
+    ```
+
+    State responses are pushed by the device whenever a sensor value or entity state changes. There is no polling — the stream remains open for the lifetime of the connection.
+  </Step>
+
+  <Step title="Keepalive">
+    The client periodically sends `PingRequest` to verify the connection is alive:
+
+    ```
+    Client ──── PingRequest  (id=7) ────► Device
+    Client ◄─── PingResponse (id=8) ──── Device
+    ```
+
+    A missing `PingResponse` within the configured timeout indicates a dead connection and triggers the disconnect callback and optional reconnect logic.
+  </Step>
+
+  <Step title="Graceful disconnect">
+    To close the connection cleanly, the client sends a `DisconnectRequest` and waits for the device to acknowledge:
+
+    ```
+    Client ──── DisconnectRequest  (id=5) ────► Device
+    Client ◄─── DisconnectResponse (id=6) ──── Device
+    Client ──── TCP Close ─────────────────────────────
+    ```
+
+    <Note>If the TCP connection drops unexpectedly (no `DisconnectRequest` received), the client invokes the `OnDisconnect` callback and, if configured, begins the reconnect loop with exponential backoff.</Note>
+  </Step>
+</Steps>
+
+## API versioning
+
+The `HelloRequest` message carries the client's supported API version (`api_version_major` / `api_version_minor`). The device echoes back its own version in `HelloResponse`.
+
+The client must:
+
+1. Read `api_version_major` from `HelloResponse`.
+2. Reject the connection if the major version does not match the expected value — a major version bump indicates breaking wire-format changes.
+3. Use `api_version_minor` to conditionally enable features that are absent in older firmware.
+
+<Tip>Send a descriptive `client_info` string in `HelloRequest` (e.g. `"my-app/1.0.0"`). ESPHome logs connected client info, which helps with debugging multi-client setups.</Tip>
+
+## Authentication
+
+<Warning>Password authentication (`AuthenticationRequest` / `AuthenticationResponse`, type IDs `3` and `4`) was removed in ESPHome 2026.1.0. Connecting to a device that still expects password auth will result in an authentication error. Migrate to Noise encryption.</Warning>
+
+Use the Noise transport with a pre-shared key for authenticated, encrypted connections. The key is a base64-encoded 32-byte value configured in the ESPHome device YAML and passed to the client via `WithEncryptionKey`.
+
+## Key message type IDs
+
+| Message | Type ID |
+|---|---|
+| `HelloRequest` | 1 |
+| `HelloResponse` | 2 |
+| `DisconnectRequest` | 5 |
+| `DisconnectResponse` | 6 |
+| `PingRequest` | 7 |
+| `PingResponse` | 8 |
+| `DeviceInfoRequest` | 9 |
+| `DeviceInfoResponse` | 10 |
+| `ListEntitiesRequest` | 11 |
+| `ListEntitiesDoneResponse` | 19 |
+| `SubscribeStatesRequest` | 20 |
+| `SubscribeLogsRequest` | 28 |
+| `SubscribeLogsResponse` | 29 |
+
+<Note>`api.proto` is the source of truth for all message type IDs. The table above covers the core connection lifecycle; entity-specific type IDs (sensors, lights, covers, etc.) are defined in `api.proto` alongside their message definitions.</Note>

@@ -1,0 +1,79 @@
+---
+title: "Introduction"
+description: "What is the ESPHome API Client and why use it"
+---
+
+The ESPHome API Client is a pure Go library for communicating directly with [ESPHome](https://esphome.io) devices over TCP using the Native API and Protocol Buffers. It lets you build Go applications that connect to ESPHome devices without Home Assistant or any other intermediary.
+
+## What problem does it solve?
+
+ESPHome devices expose a [Native API](https://esphome.io/components/api.html) — a TCP service on port 6053 that speaks Protocol Buffers. To use this API from Go, you previously had to write your own framing, handshake, and encryption logic. This library handles all of that for you.
+
+With the ESPHome API Client you can:
+
+- Read live sensor, binary sensor, and text sensor values from your devices
+- Control switches, lights, fans, climate controllers, locks, and media players
+- Stream device logs at configurable verbosity levels
+- Use ESPHome devices as Bluetooth proxies for BLE advertisement scanning and GATT operations
+- Build standalone tools, dashboards, or automations entirely in Go
+
+<Note>
+  Your ESPHome device must have the [Native API component](https://esphome.io/components/api.html) enabled in its firmware configuration. For encrypted connections, you will also need the `encryption.key` value from your ESPHome YAML.
+</Note>
+
+## Key features
+
+<Columns cols={2}>
+  <Card title="Pure Go, no CGO" icon="golang">
+    No C dependencies. The library compiles to a single static binary and works on any platform Go supports.
+  </Card>
+  <Card title="Noise protocol encryption" icon="lock">
+    Secures all communication using the Noise_NNpsk0 protocol with a pre-shared key from your ESPHome YAML config.
+  </Card>
+  <Card title="Type-safe entity registry" icon="database">
+    Automatically discovers and registers 16+ entity domains — sensors, switches, lights, climate, covers, fans, locks, media players, and more.
+  </Card>
+  <Card title="Real-time state subscriptions" icon="bolt">
+    Subscribe to live state updates with a single callback. The handler is invoked for every state change message the device sends.
+  </Card>
+  <Card title="Auto-reconnect with exponential backoff" icon="rotate">
+    Automatically reconnects after connection loss, re-discovers entities, and re-subscribes to state updates. Backoff starts at a configurable interval and caps at 5 minutes.
+  </Card>
+  <Card title="Built-in keepalive" icon="heart-pulse">
+    Sends periodic PingRequests to detect dead connections. Default interval is 20 seconds with a 10-second response timeout.
+  </Card>
+  <Card title="Bundled CLI tool" icon="terminal">
+    The `esphome-cli` command lets you scan for devices, inspect entities, stream sensor data, tail logs, and control switches directly from a terminal.
+  </Card>
+  <Card title="Bluetooth proxy support" icon="bluetooth">
+    Supports BLE advertisement subscriptions, GATT service discovery, reads, writes, and notifications via ESPHome's Bluetooth proxy component.
+  </Card>
+</Columns>
+
+## How the ESPHome Native API works
+
+ESPHome devices listen on TCP port 6053. Each message is a length-prefixed Protocol Buffer frame. The connection lifecycle is:
+
+1. **TCP connect** — establish a plain or Noise-encrypted TCP connection
+2. **Hello handshake** — exchange `HelloRequest` / `HelloResponse` to negotiate API version
+3. **Authentication** — send `ConnectRequest` with password (plain) or rely on Noise PSK (encrypted)
+4. **Communication** — send requests and receive responses or push notifications using typed protobuf messages
+
+The library handles all of these steps internally. You call `Dial` or `DialWithContext`, and get back a ready-to-use `*Client`.
+
+## Explore the documentation
+
+<Columns cols={2}>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Connect to an ESPHome device and stream sensor data in under 5 minutes.
+  </Card>
+  <Card title="Installation" icon="package" href="/installation">
+    Add the library to your Go project and configure dependencies.
+  </Card>
+  <Card title="Library guide" icon="book" href="/guides/connecting">
+    In-depth walkthroughs for connecting, entity discovery, state subscriptions, and sending commands.
+  </Card>
+  <Card title="API reference" icon="code" href="/api/client">
+    Full reference for all public types, methods, and options.
+  </Card>
+</Columns>

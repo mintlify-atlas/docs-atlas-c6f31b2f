@@ -1,0 +1,276 @@
+---
+title: "Bluetooth proxy"
+description: "Reference for all Bluetooth proxy methods"
+---
+
+<Warning>
+The Bluetooth proxy API is **experimental**. It has not been extensively tested in production. If you use it and it works for you (or doesn't), please open an issue on [GitHub](https://github.com/richard87/esphome-apiclient).
+</Warning>
+
+ESPHome devices with the [Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html) component can act as a bridge between BLE devices and your application. The client provides methods for scanning advertisements, connecting to BLE peripherals, and reading/writing GATT characteristics.
+
+## Advertisements
+
+### SubscribeBluetoothAdvertisements
+
+Sends a subscription request and registers handlers for incoming BLE advertisement packets. Handles both the legacy `BluetoothLEAdvertisementResponse` (message type 67) and the newer `BluetoothLERawAdvertisementsResponse` (message type 93).
+
+Calling the returned unsubscribe function deregisters the handlers and sends an `UnsubscribeBluetoothLEAdvertisementsRequest` to the device.
+
+```go
+func (c *Client) SubscribeBluetoothAdvertisements(handler func(proto.Message)) (func(), error)
+```
+
+<ParamField path="handler" type="func(proto.Message)" required>
+  Called for every incoming advertisement. Type-assert the message to `*pb.BluetoothLEAdvertisementResponse` or `*pb.BluetoothLERawAdvertisementsResponse` to access the fields.
+</ParamField>
+
+**Returns** an unsubscribe function and an error.
+
+```go
+unsubscribe, err := client.SubscribeBluetoothAdvertisements(func(msg proto.Message) {
+    switch m := msg.(type) {
+    case *pb.BluetoothLEAdvertisementResponse:
+        fmt.Printf("device %X  RSSI: %d  Name: %s\n", m.Address, m.Rssi, string(m.Name))
+    case *pb.BluetoothLERawAdvertisementsResponse:
+        for _, adv := range m.Advertisements {
+            fmt.Printf("device %X  RSSI: %d\n", adv.Address, adv.Rssi)
+        }
+    }
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer unsubscribe()
+
+<-ctx.Done()
+```
+
+## Connection management
+
+### BluetoothConnect
+
+Connects to a BLE device via the ESPHome Bluetooth proxy. Uses `BLUETOOTH_DEVICE_REQUEST_TYPE_CONNECT_V3_WITH_CACHE` for the connection request.
+
+Waits up to **30 seconds** for the `BluetoothDeviceConnectionResponse`.
+
+```go
+func (c *Client) BluetoothConnect(address uint64) error
+```
+
+<ParamField path="address" type="uint64" required>
+  The BLE device address as a `uint64`. The lower 6 bytes hold the 48-bit Bluetooth address.
+</ParamField>
+
+```go
+err := client.BluetoothConnect(0x0000AABBCCDDEEFF)
+if err != nil {
+    log.Fatal("connect failed:", err)
+}
+```
+
+### BluetoothDisconnect
+
+Disconnects from a connected BLE device.
+
+Waits up to **10 seconds** for the `BluetoothDeviceConnectionResponse` confirming disconnection.
+
+```go
+func (c *Client) BluetoothDisconnect(address uint64) error
+```
+
+<ParamField path="address" type="uint64" required>
+  The BLE device address.
+</ParamField>
+
+```go
+err := client.BluetoothDisconnect(0x0000AABBCCDDEEFF)
+```
+
+## GATT operations
+
+### BluetoothGATTGetServices
+
+Retrieves all GATT services from a connected BLE device. Accumulates multiple `BluetoothGATTGetServicesResponse` packets until the device sends `BluetoothGATTGetServicesDoneResponse`.
+
+Waits up to **30 seconds** for the done response. Returns a GATT error if the device sends a `BluetoothGATTErrorResponse`.
+
+```go
+func (c *Client) BluetoothGATTGetServices(address uint64) ([]*pb.BluetoothGATTService, error)
+```
+
+<ParamField path="address" type="uint64" required>
+  The BLE device address.
+</ParamField>
+
+**Returns** a slice of `*pb.BluetoothGATTService`, each containing a UUID and a list of `BluetoothGATTCharacteristic` entries.
+
+```go
+services, err := client.BluetoothGATTGetServices(0x0000AABBCCDDEEFF)
+if err != nil {
+    log.Fatal(err)
+}
+for _, svc := range services {
+    fmt.Printf("service %s  (%d characteristics)\n", svc.Uuid, len(svc.Characteristics))
+}
+```
+
+### BluetoothGATTRead
+
+Reads the value of a GATT characteristic by its handle.
+
+Waits up to **10 seconds** for the `BluetoothGATTReadResponse`. Returns a GATT error if the device sends a `BluetoothGATTErrorResponse` for the same address and handle.
+
+```go
+func (c *Client) BluetoothGATTRead(address uint64, handle uint32) ([]byte, error)
+```
+
+<ParamField path="address" type="uint64" required>
+  The BLE device address.
+</ParamField>
+
+<ParamField path="handle" type="uint32" required>
+  The GATT characteristic handle (from `BluetoothGATTGetServices`).
+</ParamField>
+
+**Returns** the raw characteristic value as `[]byte`.
+
+```go
+data, err := client.BluetoothGATTRead(0x0000AABBCCDDEEFF, 0x0025)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("read: %X\n", data)
+```
+
+### BluetoothGATTWrite
+
+Writes data to a GATT characteristic.
+
+When `response` is `false`, the message is sent fire-and-forget and the method returns immediately. When `response` is `true`, the method waits up to **10 seconds** for a `BluetoothGATTWriteResponse` confirming the write.
+
+```go
+func (c *Client) BluetoothGATTWrite(address uint64, handle uint32, data []byte, response bool) error
+```
+
+<ParamField path="address" type="uint64" required>
+  The BLE device address.
+</ParamField>
+
+<ParamField path="handle" type="uint32" required>
+  The GATT characteristic handle.
+</ParamField>
+
+<ParamField path="data" type="[]byte" required>
+  The bytes to write to the characteristic.
+</ParamField>
+
+<ParamField path="response" type="bool" required>
+  `true` to wait for a write acknowledgement (Write with Response); `false` for a fire-and-forget write (Write without Response).
+</ParamField>
+
+```go
+// Write with response (waits for acknowledgement)
+err := client.BluetoothGATTWrite(0x0000AABBCCDDEEFF, 0x0026, []byte{0x01}, true)
+
+// Write without response
+err = client.BluetoothGATTWrite(0x0000AABBCCDDEEFF, 0x0026, []byte{0x01}, false)
+```
+
+### BluetoothGATTNotify
+
+Enables or disables GATT notifications for a characteristic. When enabling, the provided `handler` is called each time the device sends a `BluetoothGATTNotifyDataResponse` for the specified address and handle.
+
+Waits up to **10 seconds** for the `BluetoothGATTNotifyResponse` confirming the subscription change.
+
+```go
+func (c *Client) BluetoothGATTNotify(address uint64, handle uint32, enable bool, handler func([]byte)) (func(), error)
+```
+
+<ParamField path="address" type="uint64" required>
+  The BLE device address.
+</ParamField>
+
+<ParamField path="handle" type="uint32" required>
+  The GATT characteristic handle.
+</ParamField>
+
+<ParamField path="enable" type="bool" required>
+  `true` to subscribe to notifications, `false` to unsubscribe.
+</ParamField>
+
+<ParamField path="handler" type="func([]byte)">
+  Called with the raw notification payload each time the characteristic value changes. Only used when `enable` is `true`.
+</ParamField>
+
+**Returns** an unsubscribe function that removes the data handler, and an error. Call the returned function to stop receiving notifications.
+
+```go
+stopNotify, err := client.BluetoothGATTNotify(
+    0x0000AABBCCDDEEFF,
+    0x0027,
+    true,
+    func(data []byte) {
+        fmt.Printf("notification: %X\n", data)
+    },
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer stopNotify()
+```
+
+## Scanner control
+
+### BluetoothScannerSetMode
+
+Sets the Bluetooth scanner mode on the ESPHome device. This controls whether the device actively scans for BLE advertisements.
+
+```go
+func (c *Client) BluetoothScannerSetMode(mode pb.BluetoothScannerMode) error
+```
+
+<ParamField path="mode" type="pb.BluetoothScannerMode" required>
+  The scanner mode. Use `pb.BluetoothScannerMode_BLUETOOTH_SCANNER_MODE_ACTIVE` or `pb.BluetoothScannerMode_BLUETOOTH_SCANNER_MODE_PASSIVE`.
+</ParamField>
+
+```go
+err := client.BluetoothScannerSetMode(pb.BluetoothScannerMode_BLUETOOTH_SCANNER_MODE_ACTIVE)
+```
+
+## Connection capacity
+
+### SubscribeBluetoothConnectionsFree
+
+Subscribes to updates reporting how many free Bluetooth connection slots remain on the proxy device. The handler is called whenever the available count changes.
+
+```go
+func (c *Client) SubscribeBluetoothConnectionsFree(handler func(*pb.BluetoothConnectionsFreeResponse)) (func(), error)
+```
+
+<ParamField path="handler" type="func(*pb.BluetoothConnectionsFreeResponse)" required>
+  Called whenever the connection slot count changes. The response includes `Free` (available slots) and `Limit` (total slots).
+</ParamField>
+
+**Returns** an unsubscribe function and an error.
+
+```go
+unsubscribe, err := client.SubscribeBluetoothConnectionsFree(func(resp *pb.BluetoothConnectionsFreeResponse) {
+    fmt.Printf("BT slots: %d / %d free\n", resp.Free, resp.Limit)
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer unsubscribe()
+```
+
+## Timeouts summary
+
+| Method | Timeout |
+|---|---|
+| `BluetoothConnect` | 30 seconds |
+| `BluetoothDisconnect` | 10 seconds |
+| `BluetoothGATTGetServices` | 30 seconds |
+| `BluetoothGATTRead` | 10 seconds |
+| `BluetoothGATTWrite` (with response) | 10 seconds |
+| `BluetoothGATTNotify` | 10 seconds |

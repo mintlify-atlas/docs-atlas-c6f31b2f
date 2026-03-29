@@ -1,0 +1,123 @@
+---
+title: "Connecting to a device"
+description: "Establish a connection to an ESPHome device using plain TCP or Noise encryption"
+---
+
+The ESPHome API client provides two connection functions: `Dial` and `DialWithContext`. Both establish a TCP connection to a device, perform the API handshake, and start the read loop. `DialWithContext` accepts a parent context so the connection can be cancelled from outside the client.
+
+## Function signatures
+
+```go
+func Dial(address string, timeout time.Duration, opts ...Option) (*Client, error)
+func DialWithContext(ctx context.Context, address string, timeout time.Duration, opts ...Option) (*Client, error)
+```
+
+The `address` parameter uses the format `hostname:port` or `IP:port`.
+
+<Note>
+The default ESPHome API port is **6053**. You must include the port in the address string — there is no automatic fallback.
+</Note>
+
+## Connection flow
+
+<Steps>
+  <Step title="Dial the device">
+    Call `Dial` or `DialWithContext` with the device address and a connection timeout. The timeout applies only to the TCP dial and handshake, not to the lifetime of the connection.
+
+    ```go
+    import (
+        "time"
+
+        esphome "github.com/richard87/esphome-apiclient"
+    )
+
+    client, err := esphome.Dial("mydevice.local:6053", 5*time.Second)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer client.Close()
+    ```
+  </Step>
+
+  <Step title="Optionally enable Noise encryption">
+    If your device has `api.encryption.key` set in its YAML, pass the base64-encoded pre-shared key using `WithEncryptionKey`. The value is the `encryption.key` field from the ESPHome device configuration.
+
+    ```go
+    client, err := esphome.Dial("mydevice.local:6053", 5*time.Second,
+        esphome.WithEncryptionKey("base64-noise-psk"),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer client.Close()
+    ```
+  </Step>
+
+  <Step title="Read device metadata">
+    After a successful connection, the API handshake populates device metadata available through client methods.
+
+    ```go
+    fmt.Println("Device name:  ", client.Name())
+    fmt.Println("Server info:  ", client.ServerInfo())
+
+    major, minor := client.APIVersion()
+    fmt.Printf("API version:   %d.%d\n", major, minor)
+    ```
+  </Step>
+
+  <Step title="Close the connection">
+    Use `defer client.Close()` for immediate cleanup. For a graceful shutdown that sends a `DisconnectRequest` to the device before closing, use `client.Disconnect()` instead.
+
+    ```go
+    // Graceful disconnect — sends DisconnectRequest and waits for DisconnectResponse
+    if err := client.Disconnect(); err != nil {
+        log.Println("disconnect error:", err)
+    }
+    ```
+  </Step>
+</Steps>
+
+## Using context for cancellation
+
+`DialWithContext` ties the client's background goroutines (read loop, keepalive, reconnect) to the provided context. When the context is cancelled, all goroutines exit cleanly.
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+
+client, err := esphome.DialWithContext(ctx, "mydevice.local:6053", 5*time.Second)
+if err != nil {
+    log.Fatal(err)
+}
+defer client.Close()
+```
+
+<Tip>
+Prefer `DialWithContext` over `Dial` in any application that needs a clean shutdown path. Cancelling the context stops the read loop, keepalive ticker, and reconnect goroutine without requiring a separate call to `Close`.
+</Tip>
+
+## Checking connection status
+
+`Connected()` reports whether the client currently has an active connection. The value is an atomic bool updated by the read loop.
+
+```go
+if client.Connected() {
+    fmt.Println("connection is active")
+}
+```
+
+To block until the read loop exits (for example, to wait for a disconnection event), receive from the `Done` channel.
+
+```go
+<-client.Done()
+fmt.Println("read loop exited")
+```
+
+## Additional options
+
+| Option | Description |
+|---|---|
+| `WithEncryptionKey(key string)` | Enable Noise PSK encryption with a base64-encoded key |
+| `WithExpectedName(name string)` | Validate device name during the Noise handshake |
+| `WithClientInfo(info string)` | Set the `client_info` field in the HelloRequest |
+| `WithLogger(l *log.Logger)` | Attach a custom logger for internal diagnostic messages |

@@ -1,0 +1,266 @@
+---
+title: "Architecture"
+description: "How the ESPHome API Client is structured internally"
+---
+
+The ESPHome API Client is organized into distinct layers, each with a single responsibility. This page explains how those layers fit together, how messages flow from your application down to the wire, and what concurrency guarantees you can rely on.
+
+## Layer overview
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                      Application Layer                       │
+│  (your code: subscribe to sensors, send commands, etc.)      │
+├──────────────────────────────────────────────────────────────┤
+│                       Client (public API)                    │
+│  Connect() / Close() / ListEntities() / SubscribeStates()    │
+│  DeviceInfo() / SendCommand() / Ping()                       │
+├──────────────────────────────────────────────────────────────┤
+│                     Entity Registry                          │
+│  Maps entity key → metadata (name, type, device_class, etc.) │
+│  Caches latest state for each entity                         │
+├──────────────────────────────────────────────────────────────┤
+│                     Message Router                           │
+│  Dispatches decoded messages by type to handlers/callbacks   │
+│  Manages subscription lifecycle                              │
+├──────────────────────────────────────────────────────────────┤
+│                    Codec (frame layer)                       │
+│  Encodes: 0x00 + VarInt(size) + VarInt(type) + proto bytes   │
+│  Decodes: reads frames from TCP, resolves type → proto msg   │
+├──────────────────────────────────────────────────────────────┤
+│                    Transport Layer                            │
+│  ┌─────────────────┐  ┌──────────────────────────────────┐  │
+│  │   Plain TCP      │  │  Noise Protocol Encryption       │  │
+│  │   (no encryption)│  │  Noise_NNpsk0_25519_ChaChaPoly   │  │
+│  └─────────────────┘  └──────────────────────────────────┘  │
+├──────────────────────────────────────────────────────────────┤
+│                     net.Conn (TCP)                            │
+└──────────────────────────────────────────────────────────────┘
+```
+
+Data flows downward when you send a command and upward when a state update arrives. Each layer is unaware of the layers above it.
+
+## Package layout
+
+```
+esphome-apiclient/
+├── api.proto              # ESPHome API protobuf definitions (source of truth)
+├── pb/                    # Generated Go protobuf code (from api.proto)
+│   └── api.pb.go
+├── transport/
+│   ├── transport.go       # Transport interface (Read/Write frames)
+│   ├── plain.go           # Plain TCP transport
+│   └── noise.go           # Noise-encrypted transport
+├── codec/
+│   └── codec.go           # Frame encoding/decoding
+├── client.go              # High-level Client struct and connection lifecycle
+├── entities.go            # Entity registry: type-safe wrappers per entity domain
+└── router.go              # Message routing and subscription dispatch
+```
+
+| Import path | Contents |
+|---|---|
+| `github.com/richard87/esphome-apiclient` | `Client`, `EntityRegistry`, `Router`, framer, commands |
+| `github.com/richard87/esphome-apiclient/pb` | Generated protobuf types from `api.proto` |
+| `github.com/richard87/esphome-apiclient/transport` | `PlainTransport` and `NoiseTransport` |
+| `github.com/richard87/esphome-apiclient/codec` | Frame encoding and decoding |
+| `github.com/richard87/esphome-apiclient/cmd/esphome-cli` | Bundled CLI tool |
+
+## Core components
+
+<Steps>
+  <Step title="Transport layer">
+    Abstracts the underlying connection so the rest of the client is encryption-agnostic. Both implementations satisfy the same interface:
+
+    ```go
+    type Transport interface {
+        Read(p []byte) (n int, err error)
+        Write(p []byte) (n int, err error)
+        Close() error
+    }
+    ```
+
+    - **`PlainTransport`** — wraps a bare `net.Conn` with no additional framing.
+    - **`NoiseTransport`** — performs the Noise Protocol handshake (`Noise_NNpsk0_25519_ChaChaPoly_SHA256`) using a pre-shared key via `github.com/flynn/noise`, then wraps the encrypted channel. All subsequent reads and writes are transparently encrypted.
+
+    <Tip>Always prefer `NoiseTransport` in production. Plain TCP transmits all sensor values and commands in cleartext.</Tip>
+  </Step>
+
+  <Step title="Frame codec">
+    Implements the ESPHome binary framing format on top of the transport:
+
+    ```go
+    type Frame struct {
+        Type uint32 // message type ID from api.proto option (id)
+        Data []byte // protobuf-encoded message body
+    }
+
+    func Encode(msg proto.Message, msgType uint32) ([]byte, error)
+    func Decode(r io.Reader) (*Frame, error)
+    ```
+
+    `Encode` produces `0x00 + VarInt(len(Data)) + VarInt(Type) + Data`. `Decode` reads that same layout back into a `Frame`. See the [protocol reference](/advanced/protocol) for full framing details.
+  </Step>
+
+  <Step title="Message router">
+    Maintains a registry that maps message type IDs to sets of handlers and dispatches decoded messages to all registered handlers for that type.
+
+    ```go
+    type MessageHandler func(msg proto.Message)
+
+    type Router struct {
+        mu       sync.RWMutex
+        handlers map[uint32]map[uint64]MessageHandler
+        nextID   uint64
+    }
+
+    // On registers a handler and returns an unsubscribe function.
+    func (r *Router) On(msgType uint32, handler MessageHandler) func()
+
+    // Dispatch calls all registered handlers for msgType.
+    func (r *Router) Dispatch(msgType uint32, msg proto.Message)
+    ```
+
+    Fan-out is supported: multiple handlers can subscribe to the same message type. For example, both the internal state cache and a user-supplied callback can listen for `SensorStateResponse` simultaneously. Calling the function returned by `On` removes only that specific subscription.
+
+    <Note>Handlers are called synchronously in the read goroutine. They must not block. Offload any long-running work to a separate goroutine.</Note>
+  </Step>
+
+  <Step title="Entity registry">
+    Caches entity metadata (populated by `ListEntities`) and the latest known state (updated by `SubscribeStates`). Provides type-safe accessors per entity domain:
+
+    ```go
+    type EntityRegistry struct {
+        sensors       map[uint32]*SensorEntity
+        binarySensors map[uint32]*BinarySensorEntity
+        switches      map[uint32]*SwitchEntity
+        lights        map[uint32]*LightEntity
+        // ... one map per entity domain
+    }
+
+    type SensorEntity struct {
+        Key               uint32
+        Name              string
+        ObjectID          string
+        UnitOfMeasurement string
+        DeviceClass       string
+        StateClass        pb.SensorStateClass
+        AccuracyDecimals  int32
+        State             float32
+        MissingState      bool
+    }
+    ```
+
+    Each entity domain has its own typed struct so you never have to cast untyped interface values. See [Entity registry](/api/entities) for the full list of entity types and their fields.
+  </Step>
+
+  <Step title="Client (public API)">
+    The main entry point. Orchestrates the connection lifecycle, entity discovery, and subscriptions:
+
+    ```go
+    func Dial(address string, timeout time.Duration, opts ...Option) (*Client, error)
+    func (c *Client) DeviceInfo() (*pb.DeviceInfoResponse, error)
+    func (c *Client) ListEntities() ([]proto.Message, error)
+    func (c *Client) SubscribeStates(handler func(msg proto.Message)) (unsubscribe func(), err error)
+    func (c *Client) SubscribeLogs(level pb.LogLevel, handler func(msg *pb.SubscribeLogsResponse)) (func(), error)
+    func (c *Client) SendCommand(cmd proto.Message) error
+    func (c *Client) Ping() error
+    func (c *Client) Close() error
+    ```
+
+    Behaviour is controlled through functional options passed to `Dial`:
+
+    ```go
+    func WithEncryptionKey(key string) Option         // base64-encoded Noise PSK
+    func WithClientInfo(info string) Option           // client_info in HelloRequest
+    func WithKeepalive(interval time.Duration) Option // ping interval (default 20s)
+    func WithReconnect(interval time.Duration) Option // auto-reconnect with backoff
+    func WithOnConnect(fn func()) Option              // callback on (re)connection
+    func WithOnDisconnect(fn func()) Option           // callback on unexpected disconnect
+    func WithLogger(l *log.Logger) Option             // logger for internal messages
+    ```
+
+    See [Options](/api/options) for the full reference.
+  </Step>
+</Steps>
+
+## Concurrency model
+
+```
+                    ┌──────────────────┐
+                    │   Read loop      │  (single goroutine)
+                    │  reads frames    │
+                    │  from transport, │
+                    │  dispatches via  │
+                    │  Router          │
+                    └────────┬─────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              ▼              ▼              ▼
+    ┌─────────────┐ ┌──────────────┐ ┌───────────┐
+    │ State cache │ │ User handler │ │ Ping/pong │
+    │ update      │ │ callback     │ │ tracking  │
+    └─────────────┘ └──────────────┘ └───────────┘
+
+                    ┌──────────────────┐
+                    │   Write path     │  (mutex-protected)
+                    │  serializes      │
+                    │  proto → frame   │
+                    │  → transport     │
+                    └──────────────────┘
+```
+
+| Concern | Mechanism |
+|---|---|
+| Frame reading | Single goroutine; all dispatch happens here |
+| Write serialization | `sync.Mutex` — safe to call `SendCommand` from multiple goroutines |
+| Keepalive | Background goroutine sends periodic `PingRequest`; monitors `PingResponse` to detect dead connections |
+| Reconnect | Optional exponential backoff loop; re-discovers entities and re-subscribes to states after reconnecting |
+
+<Note>Handlers registered with `Router.On` are called in the read goroutine. A blocking handler stalls all incoming message processing. Use a buffered channel or `go func()` to offload work.</Note>
+
+## Error handling
+
+- If the Hello handshake fails due to a version mismatch, the connection is closed immediately without sending `DisconnectRequest`.
+- On unexpected TCP close, the disconnect callback (set via `WithOnDisconnect`) is invoked, and the optional reconnect loop is triggered.
+- The client checks `api_version_major` and `api_version_minor` from `HelloResponse` and rejects connections with incompatible major versions.
+
+## Supported entity domains
+
+| Domain | ListEntities response | State response | Command request |
+|---|---|---|---|
+| Binary Sensor | `ListEntitiesBinarySensorResponse` | `BinarySensorStateResponse` | — |
+| Cover | `ListEntitiesCoverResponse` | `CoverStateResponse` | `CoverCommandRequest` |
+| Fan | `ListEntitiesFanResponse` | `FanStateResponse` | `FanCommandRequest` |
+| Light | `ListEntitiesLightResponse` | `LightStateResponse` | `LightCommandRequest` |
+| Sensor | `ListEntitiesSensorResponse` | `SensorStateResponse` | — |
+| Switch | `ListEntitiesSwitchResponse` | `SwitchStateResponse` | `SwitchCommandRequest` |
+| Text Sensor | `ListEntitiesTextSensorResponse` | `TextSensorStateResponse` | — |
+| Camera | `ListEntitiesCameraResponse` | `CameraImageResponse` | `CameraImageRequest` |
+| Climate | `ListEntitiesClimateResponse` | `ClimateStateResponse` | `ClimateCommandRequest` |
+| Water Heater | `ListEntitiesWaterHeaterResponse` | `WaterHeaterStateResponse` | `WaterHeaterCommandRequest` |
+| Number | `ListEntitiesNumberResponse` | `NumberStateResponse` | `NumberCommandRequest` |
+| Select | `ListEntitiesSelectResponse` | `SelectStateResponse` | `SelectCommandRequest` |
+| Siren | `ListEntitiesSirenResponse` | `SirenStateResponse` | `SirenCommandRequest` |
+| Lock | `ListEntitiesLockResponse` | `LockStateResponse` | `LockCommandRequest` |
+| Button | `ListEntitiesButtonResponse` | — | `ButtonCommandRequest` |
+| Media Player | `ListEntitiesMediaPlayerResponse` | `MediaPlayerStateResponse` | `MediaPlayerCommandRequest` |
+| Alarm Control Panel | `ListEntitiesAlarmControlPanelResponse` | `AlarmControlPanelStateResponse` | `AlarmControlPanelCommandRequest` |
+| Text | `ListEntitiesTextResponse` | `TextStateResponse` | `TextCommandRequest` |
+| Date | `ListEntitiesDateResponse` | `DateStateResponse` | `DateCommandRequest` |
+| Time | `ListEntitiesTimeResponse` | `TimeStateResponse` | `TimeCommandRequest` |
+| DateTime | `ListEntitiesDateTimeResponse` | `DateTimeStateResponse` | `DateTimeCommandRequest` |
+| Event | `ListEntitiesEventResponse` | `EventResponse` | — |
+| Valve | `ListEntitiesValveResponse` | `ValveStateResponse` | `ValveCommandRequest` |
+| Update | `ListEntitiesUpdateResponse` | `UpdateStateResponse` | `UpdateCommandRequest` |
+| Infrared | `ListEntitiesInfraredResponse` | `InfraredRFReceiveEvent` | `InfraredRFTransmitRawTimingsRequest` |
+
+## Code generation
+
+Protobuf code is generated from `api.proto` using:
+
+```sh
+protoc --go_out=pb --go_opt=paths=source_relative api.proto
+```
+
+This requires `protoc` and `protoc-gen-go`. The generated code lands in `pb/api.pb.go`. Do not edit `pb/api.pb.go` by hand — regenerate it from `api.proto` instead.

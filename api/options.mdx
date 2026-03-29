@@ -1,0 +1,211 @@
+---
+title: "Options"
+description: "Configuration options for the Client"
+---
+
+Options are functions of type `Option` passed as variadic arguments to `Dial` or `DialWithContext`. They configure encryption, connection metadata, keepalive behaviour, automatic reconnection, and logging.
+
+```go
+type Option func(*Client)
+```
+
+## Connection
+
+### WithEncryptionKey
+
+Enables Noise protocol encryption using a base64-encoded 32-byte pre-shared key. The key is the `encryption.key` value from the `api:` block of your ESPHome device YAML.
+
+```go
+func WithEncryptionKey(key string) Option
+```
+
+<ParamField path="key" type="string" required>
+  Base64-encoded 32-byte Noise PSK from the ESPHome device config.
+</ParamField>
+
+When this option is set, the client dials a Noise-encrypted transport instead of a plain TCP connection. Omit this option for devices without API encryption enabled.
+
+```go
+client, err := esphome.Dial("mydevice.local:6053", 5*time.Second,
+    esphome.WithEncryptionKey("base64encodedkeyhere="),
+)
+```
+
+### WithExpectedName
+
+Sets the device name to validate during the Noise handshake. If the connected device reports a different name, the handshake fails. If empty (the default), no name validation is performed.
+
+```go
+func WithExpectedName(name string) Option
+```
+
+<ParamField path="name" type="string" required>
+  The expected device name from the `esphome.name` field of the device YAML.
+</ParamField>
+
+```go
+client, err := esphome.Dial("mydevice.local:6053", 5*time.Second,
+    esphome.WithEncryptionKey("base64encodedkeyhere="),
+    esphome.WithExpectedName("living-room-sensor"),
+)
+```
+
+### WithClientInfo
+
+Sets the `client_info` string sent in the `HelloRequest`. Useful for identifying your application in ESPHome device logs.
+
+```go
+func WithClientInfo(info string) Option
+```
+
+<ParamField path="info" type="string" required>
+  Arbitrary string identifying the client application.
+</ParamField>
+
+**Default:** `"esphome-apiclient-go"`
+
+```go
+esphome.WithClientInfo("my-home-automation-app")
+```
+
+## Keepalive
+
+### WithKeepalive
+
+Configures the interval at which the client sends `PingRequest` messages to detect stale connections. Set to `0` to disable keepalive entirely.
+
+```go
+func WithKeepalive(interval time.Duration) Option
+```
+
+<ParamField path="interval" type="time.Duration" required>
+  Interval between keepalive pings. Set to `0` to disable.
+</ParamField>
+
+**Default:** `20 * time.Second`
+
+```go
+esphome.WithKeepalive(30 * time.Second)
+```
+
+### WithKeepaliveTimeout
+
+Configures how long the client waits for a `PingResponse` before treating the connection as dead.
+
+```go
+func WithKeepaliveTimeout(timeout time.Duration) Option
+```
+
+<ParamField path="timeout" type="time.Duration" required>
+  Maximum time to wait for a `PingResponse`.
+</ParamField>
+
+**Default:** `10 * time.Second`
+
+```go
+esphome.WithKeepaliveTimeout(5 * time.Second)
+```
+
+## Reconnection
+
+### WithReconnect
+
+Enables automatic reconnection with the given base interval. When the connection drops unexpectedly, the client waits for `interval`, then attempts to reconnect. If the attempt fails, the delay doubles on each retry (exponential backoff) up to a maximum of 5 minutes. Set to `0` to disable automatic reconnection.
+
+After a successful reconnect the client automatically:
+1. Re-discovers entities with `ListEntities`.
+2. Re-subscribes to state updates if `SubscribeStates` was called before the drop.
+3. Fires the `WithOnConnect` callback.
+
+```go
+func WithReconnect(interval time.Duration) Option
+```
+
+<ParamField path="interval" type="time.Duration" required>
+  Base reconnect interval. The effective delay doubles on each failed attempt, up to 5 minutes.
+</ParamField>
+
+```go
+esphome.WithReconnect(10 * time.Second)
+```
+
+## Callbacks
+
+### WithOnConnect
+
+Registers a callback that fires after the initial connection and after every successful reconnect.
+
+```go
+func WithOnConnect(fn func()) Option
+```
+
+<ParamField path="fn" type="func()" required>
+  Called after connection (or reconnection) is established.
+</ParamField>
+
+```go
+esphome.WithOnConnect(func() {
+    fmt.Println("device connected")
+})
+```
+
+### WithOnDisconnect
+
+Registers a callback that fires when an unexpected disconnection is detected by the read loop. It does not fire when `Close` or `Disconnect` is called intentionally.
+
+```go
+func WithOnDisconnect(fn func()) Option
+```
+
+<ParamField path="fn" type="func()" required>
+  Called on unexpected disconnection, before any reconnect attempt.
+</ParamField>
+
+```go
+esphome.WithOnDisconnect(func() {
+    fmt.Println("device disconnected unexpectedly")
+})
+```
+
+## Logging
+
+### WithLogger
+
+Attaches a custom `*log.Logger` used by the client to emit diagnostic messages for keepalive failures and reconnect attempts. Without this option, no internal messages are logged.
+
+```go
+func WithLogger(l *log.Logger) Option
+```
+
+<ParamField path="l" type="*log.Logger" required>
+  A standard library logger. The client writes keepalive and reconnect messages to it.
+</ParamField>
+
+```go
+logger := log.New(os.Stderr, "[esphome] ", log.LstdFlags)
+
+client, err := esphome.Dial("mydevice.local:6053", 5*time.Second,
+    esphome.WithLogger(logger),
+    esphome.WithReconnect(10*time.Second),
+)
+```
+
+## Full example
+
+```go
+client, err := esphome.DialWithContext(ctx, "mydevice.local:6053", 5*time.Second,
+    esphome.WithEncryptionKey("base64encodedkeyhere="),
+    esphome.WithExpectedName("mydevice"),
+    esphome.WithClientInfo("my-app/1.0"),
+    esphome.WithKeepalive(20*time.Second),
+    esphome.WithKeepaliveTimeout(10*time.Second),
+    esphome.WithReconnect(10*time.Second),
+    esphome.WithOnConnect(func() {
+        fmt.Println("connected")
+    }),
+    esphome.WithOnDisconnect(func() {
+        fmt.Println("disconnected")
+    }),
+    esphome.WithLogger(log.New(os.Stderr, "[esphome] ", log.LstdFlags)),
+)
+```

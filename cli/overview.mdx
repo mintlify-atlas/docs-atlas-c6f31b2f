@@ -1,0 +1,67 @@
+---
+title: "CLI overview"
+description: "Install and use the esphome-cli tool to interact with ESPHome devices from the terminal"
+---
+
+`esphome-cli` is a bundled command-line tool for interacting with ESPHome devices directly from the terminal. It wraps the Go client library and exposes the most common operations — scanning for devices, reading device info, streaming sensor values, tailing logs, and controlling switches — as simple subcommands.
+
+## Installation
+
+Install with `go install`:
+
+```sh
+go install github.com/richard87/esphome-apiclient/cmd/esphome-cli@latest
+```
+
+<Note>
+Ensure your `GOBIN` directory (usually `$HOME/go/bin`) is in your `PATH`. If `esphome-cli` is not found after installation, add `export PATH="$HOME/go/bin:$PATH"` to your shell profile.
+</Note>
+
+## Global flags
+
+Global flags can be placed before or after the subcommand — flags are inherited by all subcommands.
+
+| Flag | Short | Description |
+|---|---|---|
+| `--address` | `-a` | Device address in `host:port` format. Overrides the address derived from `--yaml`. |
+| `--yaml` | `-y` | Path to an ESPHome device YAML config file. Derives the device address and encryption key automatically. |
+| `--key` | `-k` | Base64-encoded Noise encryption key. Overrides the key from `--yaml`. |
+| `--name` | `-n` | Expected device name used for Noise handshake validation. |
+| `--timeout` | `-t` | Connection timeout (default: `5s`). |
+
+### Using `--yaml` for automatic configuration
+
+The `--yaml` flag accepts the path to an ESPHome device YAML file and automatically derives the device address (`<name>.local:6053`) and Noise encryption key from the `esphome.name` and `api.encryption.key` fields. This is the most convenient way to connect when you have the device YAML on hand.
+
+If a `secrets.yaml` file exists in the same directory, `!secret` references inside the device YAML are substituted automatically before parsing.
+
+```sh
+esphome-cli --yaml path/to/device.yaml info
+```
+
+## Available subcommands
+
+| Subcommand | Description |
+|---|---|
+| `scan` | Scan for ESPHome devices on the local network using mDNS |
+| `info` | Print device info (name, MAC address, ESPHome version, model, API version) |
+| `entities` | List all entities on the device grouped by domain |
+| `sensors` | Stream live state updates for sensors, binary sensors, switches, and text sensors |
+| `logs` | Stream device log output with optional level filtering |
+| `switch` | List switches or control a specific switch |
+| `bluetooth` | Stream Bluetooth LE advertisement packets |
+
+## Quick examples
+
+```sh
+# Scan for ESPHome devices on the local network
+esphome-cli scan
+
+# Connect using an ESPHome YAML config (derives address and key automatically)
+esphome-cli --yaml device.yaml info
+
+# Connect by specifying address and key directly
+esphome-cli --address mydevice.local:6053 --key "base64-noise-psk" logs
+```
+
+See [CLI commands](/cli/commands) for the full reference for each subcommand and its flags.

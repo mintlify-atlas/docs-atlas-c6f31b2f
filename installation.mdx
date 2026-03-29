@@ -1,0 +1,118 @@
+---
+title: "Installation"
+description: "Add the ESPHome API Client to your Go project"
+---
+
+## Requirements
+
+The ESPHome API Client requires **Go 1.21 or later**. The module itself is developed against Go 1.26, so using a recent Go toolchain is recommended to ensure compatibility with all transitive dependencies.
+
+## Install the module
+
+Add the library to your Go project using `go get`:
+
+<CodeGroup>
+
+```bash go get
+go get github.com/richard87/esphome-apiclient
+```
+
+```bash go mod tidy (after editing go.mod)
+go mod tidy
+```
+
+</CodeGroup>
+
+This fetches the module and adds it to your `go.mod` and `go.sum` files.
+
+## Import paths
+
+The library exposes two import paths:
+
+| Path | Purpose |
+|------|---------|
+| `github.com/richard87/esphome-apiclient` | Main client package — `Dial`, `DialWithContext`, options, entity registry |
+| `github.com/richard87/esphome-apiclient/pb` | Generated protobuf types for entity responses, state responses, and commands |
+
+Use both together in most programs:
+
+```go
+import (
+    esphome "github.com/richard87/esphome-apiclient"
+    "github.com/richard87/esphome-apiclient/pb"
+)
+```
+
+## Key dependencies
+
+The library pulls in the following direct dependencies:
+
+<AccordionGroup>
+  <Accordion title="github.com/flynn/noise v1.1.0">
+    Implements the Noise protocol framework used for encrypted connections. ESPHome uses the `Noise_NNpsk0_25519_ChaChaPoly_SHA256` pattern with a base64-encoded pre-shared key from your device config.
+  </Accordion>
+  <Accordion title="google.golang.org/protobuf v1.36.11">
+    The official Go Protocol Buffers runtime. All messages sent and received over the ESPHome Native API are protobuf-encoded. The `pb` subpackage contains the generated types.
+  </Accordion>
+  <Accordion title="github.com/miekg/dns v1.1.72">
+    DNS and mDNS library used by the CLI tool for device discovery on the local network (`esphome-cli scan`).
+  </Accordion>
+  <Accordion title="github.com/urfave/cli/v3 v3.8.0">
+    CLI framework used by the bundled `esphome-cli` tool. Not required if you only use the library in your own code.
+  </Accordion>
+  <Accordion title="gopkg.in/yaml.v3 v3.0.1">
+    YAML parser used by the CLI tool to read ESPHome device config files and extract the address and encryption key automatically.
+  </Accordion>
+</AccordionGroup>
+
+## go.mod example
+
+After running `go get`, your `go.mod` will include an entry like:
+
+```go go.mod
+module your-module-name
+
+go 1.21
+
+require (
+    github.com/richard87/esphome-apiclient v1.1.0
+    google.golang.org/protobuf v1.36.11
+)
+```
+
+Run `go mod tidy` to add all transitive dependencies to `go.sum`.
+
+## Install the CLI tool
+
+The bundled `esphome-cli` command lets you interact with ESPHome devices directly from a terminal — scan for devices, list entities, stream sensor data, tail logs, and control switches.
+
+```bash
+go install github.com/richard87/esphome-apiclient/cmd/esphome-cli@latest
+```
+
+<Note>
+  The `go install` command places the binary in your `GOBIN` directory, which defaults to `$HOME/go/bin`. Make sure this directory is in your `PATH` so you can run `esphome-cli` from anywhere:
+
+  ```bash
+  export PATH="$PATH:$HOME/go/bin"
+  ```
+
+  Add this line to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) to make it permanent.
+</Note>
+
+Verify the installation:
+
+```bash
+esphome-cli --help
+```
+
+## Next steps
+
+<Columns cols={2}>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Write your first program that connects to a device and streams sensor data.
+  </Card>
+  <Card title="CLI tool" icon="terminal" href="/cli/overview">
+    Learn how to use `esphome-cli` to inspect and control devices from the terminal.
+  </Card>
+</Columns>

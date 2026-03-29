@@ -1,0 +1,86 @@
+---
+title: "Streaming device logs"
+description: "Subscribe to real-time log output from ESPHome firmware"
+---
+
+ESPHome firmware writes structured log messages at configurable severity levels. The API client can subscribe to these messages in real time, which is useful for debugging device behaviour and monitoring firmware output without needing a serial connection.
+
+## Function signature
+
+```go
+func (c *Client) SubscribeLogs(
+    level pb.LogLevel,
+    handler func(msg *pb.SubscribeLogsResponse),
+) (unsubscribe func(), err error)
+```
+
+`SubscribeLogs` sends a `SubscribeLogsRequest` to the device with `DumpConfig: true` set automatically. This causes the device to emit its current configuration as log messages immediately after the subscription is accepted.
+
+## Example
+
+```go
+import (
+    "fmt"
+    "log"
+
+    "github.com/richard87/esphome-apiclient/pb"
+)
+
+unsubscribe, err := client.SubscribeLogs(pb.LogLevel_LOG_LEVEL_DEBUG,
+    func(msg *pb.SubscribeLogsResponse) {
+        fmt.Printf("[%s] %s\n", msg.Level, msg.Message)
+    },
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer unsubscribe()
+
+// Block until the connection closes
+<-client.Done()
+```
+
+## Log levels
+
+Pass one of the following constants as the `level` argument. The device will deliver messages at that level and all higher-severity levels.
+
+| Constant | Severity |
+|---|---|
+| `pb.LogLevel_LOG_LEVEL_NONE` | No log output |
+| `pb.LogLevel_LOG_LEVEL_ERROR` | Errors only |
+| `pb.LogLevel_LOG_LEVEL_WARN` | Warnings and errors |
+| `pb.LogLevel_LOG_LEVEL_INFO` | Informational messages and above |
+| `pb.LogLevel_LOG_LEVEL_CONFIG` | Configuration messages and above |
+| `pb.LogLevel_LOG_LEVEL_DEBUG` | Debug messages and above (default for CLI) |
+| `pb.LogLevel_LOG_LEVEL_VERBOSE` | Verbose trace messages and above |
+| `pb.LogLevel_LOG_LEVEL_VERY_VERBOSE` | All messages including very verbose trace |
+
+## SubscribeLogsResponse fields
+
+| Field | Type | Description |
+|---|---|---|
+| `Level` | `pb.LogLevel` | Severity level of this message |
+| `Message` | `string` | Log message text |
+| `SendFailed` | `bool` | True if the device could not send a previous message (buffer overflow) |
+
+## Unsubscribing
+
+The returned `unsubscribe` function removes the log handler. After calling it, no further messages will be delivered to the handler.
+
+```go
+unsubscribe, err := client.SubscribeLogs(pb.LogLevel_LOG_LEVEL_INFO, handler)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Stop receiving logs after 60 seconds
+time.Sleep(60 * time.Second)
+unsubscribe()
+```
+
+## Practical uses
+
+- **Debugging sensor readings** — stream `DEBUG` logs to see raw values before filtering
+- **Monitoring firmware boot** — the automatic config dump on subscribe shows the active component configuration
+- **Detecting errors in production** — subscribe at `ERROR` level to receive only actionable messages
+- **Developing automations** — trace state machine transitions by watching `INFO` or `DEBUG` output

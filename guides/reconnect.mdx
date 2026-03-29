@@ -1,0 +1,125 @@
+---
+title: "Auto-reconnect"
+description: "Configure automatic reconnection with exponential backoff"
+---
+
+The client can automatically restore the connection if the TCP link drops unexpectedly. When enabled, it retries with exponential backoff, re-discovers entities, and re-registers any active state subscription — with no code changes required in your application.
+
+## Enabling auto-reconnect
+
+Pass `WithReconnect` to `Dial` or `DialWithContext` with a base retry interval:
+
+```go
+client, err := esphome.Dial("mydevice.local:6053", 5*time.Second,
+    esphome.WithEncryptionKey("base64-noise-psk"),
+    esphome.WithReconnect(10*time.Second),
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer client.Close()
+```
+
+## Backoff behaviour
+
+The reconnect loop starts at the given interval, doubles after each failed attempt, and caps at 5 minutes:
+
+| Attempt | Wait (base = 10s) |
+|---|---|
+| 1 | 10 s |
+| 2 | 20 s |
+| 3 | 40 s |
+| 4 | 80 s |
+| ... | ... |
+| cap | 5 min |
+
+## What happens on reconnect
+
+1. The entity registry is cleared.
+2. A new TCP connection is established (plain or Noise, using the original options).
+3. `ListEntities` is called to re-populate the registry.
+4. If a state handler was registered before the disconnect, `SubscribeStates` is called automatically with the saved handler.
+5. The `WithOnConnect` callback fires.
+
+<Note>
+Calling `Disconnect()` intentionally disables the reconnect loop. The method sets the reconnect interval to zero before sending the `DisconnectRequest`, so the client will not attempt to reconnect after a graceful shutdown.
+</Note>
+
+## Connection callbacks
+
+Register `WithOnConnect` and `WithOnDisconnect` to react to connection state changes:
+
+```go
+client, err := esphome.Dial("mydevice.local:6053", 5*time.Second,
+    esphome.WithEncryptionKey("base64-noise-psk"),
+    esphome.WithReconnect(10*time.Second),
+    esphome.WithOnConnect(func() {
+        log.Println("connected to device")
+    }),
+    esphome.WithOnDisconnect(func() {
+        log.Println("device disconnected, reconnecting...")
+    }),
+)
+```
+
+`WithOnConnect` fires after the initial connection and after every successful reconnect. `WithOnDisconnect` fires only on unexpected drops, not on intentional `Disconnect()` calls.
+
+## Keepalive
+
+The client sends `PingRequest` messages on a ticker to detect dead connections that the TCP layer has not yet reported as closed. This ensures the reconnect loop triggers promptly even when the network silently drops packets.
+
+```go
+client, err := esphome.Dial("mydevice.local:6053", 5*time.Second,
+    esphome.WithKeepalive(20*time.Second),        // default: 20s
+    esphome.WithKeepaliveTimeout(10*time.Second), // default: 10s
+)
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `WithKeepalive(interval)` | 20 s | How often to send a ping. Set to `0` to disable. |
+| `WithKeepaliveTimeout(timeout)` | 10 s | How long to wait for the ping response before treating the connection as dead. |
+
+To disable keepalive entirely:
+
+```go
+esphome.WithKeepalive(0)
+```
+
+## Clean shutdown with context
+
+Use `DialWithContext` with a cancellable context to stop all background goroutines (read loop, keepalive, reconnect) cleanly when your application exits:
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+
+client, err := esphome.DialWithContext(ctx, "mydevice.local:6053", 5*time.Second,
+    esphome.WithReconnect(10*time.Second),
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer client.Close()
+
+// Application logic...
+
+// On shutdown, cancel the context to stop all goroutines.
+cancel()
+```
+
+<Tip>
+Context cancellation is the cleanest shutdown path in long-running applications. Cancelling the context stops the reconnect loop immediately, preventing any retry attempts during shutdown. `client.Close()` then cleans up the transport.
+</Tip>
+
+## Checking connection status
+
+```go
+if client.Connected() {
+    fmt.Println("currently connected")
+}
+
+// Block until the read loop exits (e.g. after Close or context cancel)
+<-client.Done()
+fmt.Println("connection closed")
+```

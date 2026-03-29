@@ -1,80 +1,209 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: "Quick start"
+description: "Connect to an ESPHome device and stream sensor data in under 5 minutes"
 ---
 
-## Get started in three steps
+## Prerequisites
 
-Get your documentation site running locally and make your first customization.
+Before you begin, make sure you have:
 
-### Step 1: Set up your local environment
+- Go 1.21 or later installed
+- An ESPHome device with the [Native API component](https://esphome.io/components/api.html) enabled
+- The device's hostname or IP address and port (default port is `6053`)
+- The `encryption.key` value from your ESPHome YAML (if the device uses encrypted connections)
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+<Tip>
+  The encryption key is a base64-encoded 32-byte string found in the `api:` section of your ESPHome YAML config:
 
-### Step 2: Deploy your changes
+  ```yaml esphome device config
+  api:
+    encryption:
+      key: "your-base64-encoded-key-here"
+  ```
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+  Copy the value of `key` exactly as it appears.
+</Tip>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+## Steps
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+<Steps>
+  <Step title="Install the module">
+    Add the library to your Go project:
 
-### Step 3: Go live
+    ```bash
+    go get github.com/richard87/esphome-apiclient
+    ```
+  </Step>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+  <Step title="Import the packages">
+    Your Go file needs two import paths — the main client package and the generated protobuf types:
+
+    ```go
+    import (
+        "context"
+        "fmt"
+        "log"
+        "time"
+
+        esphome "github.com/richard87/esphome-apiclient"
+        "github.com/richard87/esphome-apiclient/pb"
+        "google.golang.org/protobuf/proto"
+    )
+    ```
+  </Step>
+
+  <Step title="Connect with DialWithContext">
+    Use `DialWithContext` to connect with a parent context. The function signature is:
+
+    ```go
+    func DialWithContext(ctx context.Context, address string, timeout time.Duration, opts ...Option) (*Client, error)
+    ```
+
+    Or use `Dial` if you don't need context cancellation:
+
+    ```go
+    func Dial(address string, timeout time.Duration, opts ...Option) (*Client, error)
+    ```
+
+    Connect to your device:
+
+    ```go
+    ctx := context.Background()
+
+    client, err := esphome.DialWithContext(ctx, "mydevice.local:6053", 5*time.Second,
+        esphome.WithEncryptionKey("base64-noise-psk"),
+        esphome.WithClientInfo("my-app"),
+        esphome.WithReconnect(10*time.Second),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer client.Close()
+    ```
+
+    <Note>
+      If your device does not use encryption, omit `WithEncryptionKey`. The client will connect using a plain (unencrypted) TCP connection instead.
+    </Note>
+  </Step>
+
+  <Step title="Get device info">
+    Fetch basic information about the connected device:
+
+    ```go
+    info, err := client.DeviceInfo()
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("Connected to %s (ESPHome %s)\n", info.Name, info.EsphomeVersion)
+    ```
+  </Step>
+
+  <Step title="List entities and subscribe to states">
+    Discover the device's entities, then subscribe to live state updates:
+
+    ```go
+    // Discover entities and populate the entity registry
+    client.ListEntities()
+    for _, s := range client.Entities().Sensors() {
+        fmt.Printf("  sensor: %s (%s)\n", s.Name, s.UnitOfMeasurement)
+    }
+
+    // Subscribe to state updates
+    client.SubscribeStates(func(msg proto.Message) {
+        switch m := msg.(type) {
+        case *pb.SensorStateResponse:
+            entity := client.Entities().ByKey(m.Key)
+            fmt.Printf("sensor %s = %.4g\n", entity.GetName(), m.State)
+        case *pb.SwitchStateResponse:
+            fmt.Printf("switch 0x%08X = %v\n", m.Key, m.State)
+        }
+    })
+    ```
+  </Step>
+
+  <Step title="Send a command">
+    Control a switch by its key:
+
+    ```go
+    client.SetSwitch(0x12345678, true)
+    ```
+
+    The switch key is a `uint32` that identifies the entity on the device. You can find keys by listing entities and inspecting the `Key` field of each entity response.
+  </Step>
+</Steps>
+
+## Complete example
+
+Here is a full working program that puts all the steps together:
+
+```go main.go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "time"
+
+    esphome "github.com/richard87/esphome-apiclient"
+    "github.com/richard87/esphome-apiclient/pb"
+    "google.golang.org/protobuf/proto"
+)
+
+func main() {
+    ctx := context.Background()
+
+    client, err := esphome.DialWithContext(ctx, "mydevice.local:6053", 5*time.Second,
+        esphome.WithEncryptionKey("base64-noise-psk"),
+        esphome.WithClientInfo("my-app"),
+        esphome.WithReconnect(10*time.Second),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer client.Close()
+
+    // Get device info
+    info, _ := client.DeviceInfo()
+    fmt.Printf("Connected to %s (ESPHome %s)\n", info.Name, info.EsphomeVersion)
+
+    // Discover entities
+    client.ListEntities()
+    for _, s := range client.Entities().Sensors() {
+        fmt.Printf("  sensor: %s (%s)\n", s.Name, s.UnitOfMeasurement)
+    }
+
+    // Stream state updates
+    client.SubscribeStates(func(msg proto.Message) {
+        switch m := msg.(type) {
+        case *pb.SensorStateResponse:
+            entity := client.Entities().ByKey(m.Key)
+            fmt.Printf("sensor %s = %.4g\n", entity.GetName(), m.State)
+        case *pb.SwitchStateResponse:
+            fmt.Printf("switch 0x%08X = %v\n", m.Key, m.State)
+        }
+    })
+
+    // Send a command
+    client.SetSwitch(0x12345678, true)
+
+    <-ctx.Done()
+}
+```
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
+<Columns cols={2}>
+  <Card title="Library guide" icon="book" href="/guides/connecting">
+    Learn more about connecting, entity discovery, and subscriptions.
+  </Card>
+  <Card title="API reference" icon="code" href="/api/client">
+    Full reference for all public types and methods.
+  </Card>
+  <Card title="CLI tool" icon="terminal" href="/cli/overview">
+    Use the bundled CLI to inspect devices from the terminal.
+  </Card>
+  <Card title="Bluetooth proxy" icon="bluetooth" href="/advanced/bluetooth-proxy">
+    Use ESPHome devices as BLE proxies for advertisement scanning and GATT.
+  </Card>
+</Columns>

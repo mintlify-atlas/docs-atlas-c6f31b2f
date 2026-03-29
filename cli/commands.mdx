@@ -1,0 +1,219 @@
+---
+title: "CLI commands"
+description: "Reference for all esphome-cli subcommands and their flags"
+---
+
+All subcommands accept the [global flags](/cli/overview#global-flags) (`--yaml`, `--address`, `--key`, `--name`, `--timeout`) in addition to any command-specific flags listed below.
+
+<AccordionGroup>
+  <Accordion title="scan">
+    Scan for ESPHome devices on the local network using mDNS. No connection is established — the scan sends an mDNS query for the `_esphomelib._tcp.local.` service and collects responses for the duration of the timeout.
+
+    **Usage**
+
+    ```sh
+    esphome-cli scan [--timeout <duration>]
+    ```
+
+    **Flags**
+
+    | Flag | Default | Description |
+    |---|---|---|
+    | `--timeout` / `-t` | `5s` | How long to listen for mDNS responses. |
+
+    **Example**
+
+    ```sh
+    esphome-cli scan
+    esphome-cli scan --timeout 10s
+    ```
+
+    **Output**
+
+    ```
+    Scanning for ESPHome devices for 5s...
+    NAME                      ADDRESS          PORT   TXT
+    living-room-sensor        192.168.1.42     6053   [version=2023.11.0 ...]
+    bedroom-light             192.168.1.55     6053   [version=2023.11.0 ...]
+    ```
+  </Accordion>
+
+  <Accordion title="info">
+    Connect to a device and print its identity information: name, MAC address, ESPHome version, model, project name and version, compilation timestamp, and negotiated API version.
+
+    **Usage**
+
+    ```sh
+    esphome-cli --yaml device.yaml info
+    esphome-cli --address mydevice.local:6053 --key "base64-noise-psk" info
+    ```
+
+    **Example output**
+
+    ```
+    Device Info:
+      Name:             living-room-sensor
+      MAC Address:      AA:BB:CC:DD:EE:FF
+      ESPHome Version:  2023.11.0
+      Model:            ESP32
+      Project Name:     my-project
+      Project Version:  1.0.0
+      Compilation Time: Nov 15 2023, 10:23:45
+      API Version:      1.10
+    ```
+  </Accordion>
+
+  <Accordion title="entities">
+    Connect to a device and print all entities grouped by domain. Each entity shows its hex key, name, object ID, and (for sensors) unit of measurement. Also displays ESPHome services with their argument signatures.
+
+    **Usage**
+
+    ```sh
+    esphome-cli --yaml device.yaml entities
+    ```
+
+    **Example output**
+
+    ```
+    Found 12 entities:
+
+    Sensors (3):
+      [0x11223344] Temperature (temperature) unit=°C
+      [0xAABBCCDD] Humidity (humidity) unit=%
+
+    Switches (1):
+      [0x12345678] Relay (relay)
+
+    Services (1):
+      [0xDEADBEEF] play_rtttl(rtttl:string)
+    ```
+  </Accordion>
+
+  <Accordion title="sensors">
+    Connect to a device, discover entities, then stream live state updates. Prints a formatted line each time a sensor, binary sensor, switch, or text sensor value changes. Press `Ctrl+C` to stop.
+
+    **Usage**
+
+    ```sh
+    esphome-cli --yaml device.yaml sensors
+    ```
+
+    **Example output**
+
+    ```
+    Streaming sensor values (press Ctrl+C to stop)...
+
+    [sensor] Temperature = 21.5 °C
+    [binary_sensor] Motion = true
+    [switch] Relay = false
+    [text_sensor] Status = online
+    [sensor] Humidity = <missing>
+    ```
+  </Accordion>
+
+  <Accordion title="logs">
+    Connect to a device and stream log output. Each line is prefixed with the log level. The `--level` flag sets the minimum level to receive — the device filters and sends only messages at or above that level.
+
+    **Usage**
+
+    ```sh
+    esphome-cli --yaml device.yaml logs [--level <LEVEL>]
+    ```
+
+    **Flags**
+
+    | Flag | Default | Description |
+    |---|---|---|
+    | `--level` | `DEBUG` | Minimum log level to receive. Accepted values: `NONE`, `ERROR`, `WARN`, `INFO`, `CONFIG`, `DEBUG`, `VERBOSE`, `VERY_VERBOSE`. |
+
+    **Examples**
+
+    ```sh
+    # Stream all logs (DEBUG and above)
+    esphome-cli --yaml device.yaml logs
+
+    # Stream INFO and above only
+    esphome-cli --yaml device.yaml logs --level INFO
+
+    # Stream errors only
+    esphome-cli --yaml device.yaml logs --level ERROR
+    ```
+
+    **Example output**
+
+    ```
+    Streaming logs (level >= INFO, press Ctrl+C to stop)...
+
+    [INFO] Connected to WiFi
+    [INFO] API client connected
+    [WARN] NTP sync failed, retrying
+    ```
+  </Accordion>
+
+  <Accordion title="switch">
+    Connect to a device and either list all available switches (when `--switch-key` is omitted) or set a specific switch to on or off.
+
+    **Usage**
+
+    ```sh
+    # List all switches
+    esphome-cli --yaml device.yaml switch
+
+    # Control a specific switch
+    esphome-cli --yaml device.yaml switch --switch-key <KEY> --switch-state on|off
+    ```
+
+    **Flags**
+
+    | Flag | Description |
+    |---|---|
+    | `--switch-key` | Hex key of the switch entity (e.g. `0xABCD1234`). Omit to list available switches. |
+    | `--switch-state` | Target state: `on`, `off`, `true`, `false`, `1`, or `0`. Required when `--switch-key` is provided. |
+
+    **Examples**
+
+    ```sh
+    # List available switches and their current state
+    esphome-cli --yaml device.yaml switch
+
+    # Turn a switch on
+    esphome-cli --yaml device.yaml switch --switch-key 0xABCD1234 --switch-state on
+
+    # Turn a switch off
+    esphome-cli --yaml device.yaml switch --switch-key 0xABCD1234 --switch-state off
+    ```
+
+    **List output**
+
+    ```
+    Available switches:
+      [0xABCD1234] Relay = OFF
+      [0x11223344] LED = ON
+
+    Usage: switch --switch-key <KEY> --switch-state on|off
+    ```
+  </Accordion>
+
+  <Accordion title="bluetooth">
+    Connect to a device that has the Bluetooth proxy component enabled, then stream Bluetooth LE advertisement packets. Handles both the legacy `BluetoothLEAdvertisementResponse` and the newer `BluetoothLERawAdvertisementsResponse` formats. Press `Ctrl+C` to stop.
+
+    **Usage**
+
+    ```sh
+    esphome-cli --yaml device.yaml bluetooth
+    ```
+
+    **Example output**
+
+    ```
+    Streaming Bluetooth LE advertisements (press Ctrl+C to stop)...
+
+    [aabbccddeeff] RSSI: -72, Name: My BLE Device
+    [112233445566] RSSI: -85
+    ```
+
+    <Note>
+    This command requires a device with the [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy.html) component configured. See [Bluetooth proxy](/api/bluetooth) for the corresponding API methods.
+    </Note>
+  </Accordion>
+</AccordionGroup>

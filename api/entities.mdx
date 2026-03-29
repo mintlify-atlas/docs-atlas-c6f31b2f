@@ -1,0 +1,404 @@
+---
+title: "Entity registry"
+description: "Reference for the EntityRegistry and all entity types"
+---
+
+The `EntityRegistry` caches entity metadata populated by `ListEntities` and the latest state from incoming state responses. It is thread-safe for concurrent access and is available via `client.Entities()`.
+
+## Entity interface
+
+Every entity type implements the `Entity` interface:
+
+```go
+type Entity interface {
+    GetKey()      uint32
+    GetName()     string
+    GetObjectID() string
+    GetDomain()   EntityDomain
+}
+```
+
+`GetDomain()` returns an `EntityDomain` constant. Calling `.String()` on it returns the canonical ESPHome domain name (e.g. `"sensor"`, `"binary_sensor"`, `"switch"`).
+
+## EntityDomain constants
+
+```go
+const (
+    DomainSensor      EntityDomain = iota
+    DomainBinarySensor
+    DomainCover
+    DomainFan
+    DomainLight
+    DomainSwitch
+    DomainTextSensor
+    DomainCamera
+    DomainClimate
+    DomainNumber
+    DomainSelect
+    DomainSiren
+    DomainLock
+    DomainButton
+    DomainMediaPlayer
+    DomainWaterHeater
+)
+```
+
+| Constant | Domain string |
+|---|---|
+| `DomainSensor` | `sensor` |
+| `DomainBinarySensor` | `binary_sensor` |
+| `DomainCover` | `cover` |
+| `DomainFan` | `fan` |
+| `DomainLight` | `light` |
+| `DomainSwitch` | `switch` |
+| `DomainTextSensor` | `text_sensor` |
+| `DomainCamera` | `camera` |
+| `DomainClimate` | `climate` |
+| `DomainNumber` | `number` |
+| `DomainSelect` | `select` |
+| `DomainSiren` | `siren` |
+| `DomainLock` | `lock` |
+| `DomainButton` | `button` |
+| `DomainMediaPlayer` | `media_player` |
+| `DomainWaterHeater` | `water_heater` |
+
+## EntityRegistry methods
+
+### ByKey
+
+Returns any entity by its numeric key. Returns `nil` if no entity with that key has been registered.
+
+```go
+func (r *EntityRegistry) ByKey(key uint32) Entity
+```
+
+```go
+entity := client.Entities().ByKey(0x12345678)
+if entity != nil {
+    fmt.Printf("%s (%s)\n", entity.GetName(), entity.GetDomain())
+}
+```
+
+### Len
+
+Returns the total number of entities registered across all domains.
+
+```go
+func (r *EntityRegistry) Len() int
+```
+
+### Clear
+
+Removes all entities from every domain map. Called automatically by the reconnect loop before re-discovering entities after a reconnection.
+
+```go
+func (r *EntityRegistry) Clear()
+```
+
+### Typed accessors
+
+Each domain has a dedicated accessor that returns a slice of the concrete entity type. The slice is a copy — modifying it does not affect the registry.
+
+```go
+func (r *EntityRegistry) Sensors() []*SensorEntity
+func (r *EntityRegistry) BinarySensors() []*BinarySensorEntity
+func (r *EntityRegistry) Switches() []*SwitchEntity
+func (r *EntityRegistry) Lights() []*LightEntity
+func (r *EntityRegistry) Covers() []*CoverEntity
+func (r *EntityRegistry) Fans() []*FanEntity
+func (r *EntityRegistry) Climates() []*ClimateEntity
+func (r *EntityRegistry) Numbers() []*NumberEntity
+func (r *EntityRegistry) Selects() []*SelectEntity
+func (r *EntityRegistry) Sirens() []*SirenEntity
+func (r *EntityRegistry) Locks() []*LockEntity
+func (r *EntityRegistry) Buttons() []*ButtonEntity
+func (r *EntityRegistry) MediaPlayers() []*MediaPlayerEntity
+func (r *EntityRegistry) WaterHeaters() []*WaterHeaterEntity
+func (r *EntityRegistry) TextSensors() []*TextSensorEntity
+func (r *EntityRegistry) Cameras() []*CameraEntity
+```
+
+## Entity types
+
+<AccordionGroup>
+  <Accordion title="SensorEntity">
+    Numeric sensor with a float state and optional unit of measurement.
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `Key` | `uint32` | Stable entity identifier |
+    | `Name` | `string` | Human-readable name |
+    | `ObjectID` | `string` | Entity object ID |
+    | `Icon` | `string` | Optional icon string |
+    | `UnitOfMeasurement` | `string` | e.g. `°C`, `%`, `hPa` |
+    | `DeviceClass` | `string` | e.g. `temperature`, `humidity` |
+    | `StateClass` | `pb.SensorStateClass` | Measurement, total, or total increasing |
+    | `AccuracyDecimals` | `int32` | Display precision hint |
+    | `ForceUpdate` | `bool` | Whether state is always published |
+    | `DisabledByDefault` | `bool` | Whether entity is disabled by default |
+    | `EntityCategory` | `pb.EntityCategory` | Entity category |
+    | `DeviceID` | `uint32` | Associated device ID |
+    | `State` | `float32` | Latest received value |
+    | `MissingState` | `bool` | `true` until the first state update is received |
+
+    ```go
+    for _, s := range client.Entities().Sensors() {
+        if s.MissingState {
+            fmt.Printf("%s = <missing>\n", s.Name)
+        } else {
+            fmt.Printf("%s = %.4g %s\n", s.Name, s.State, s.UnitOfMeasurement)
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="BinarySensorEntity">
+    Boolean sensor (on/off, true/false).
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `Key` | `uint32` | Stable entity identifier |
+    | `Name` | `string` | Human-readable name |
+    | `ObjectID` | `string` | Entity object ID |
+    | `Icon` | `string` | Optional icon string |
+    | `DeviceClass` | `string` | e.g. `motion`, `door`, `occupancy` |
+    | `IsStatusBinarySensor` | `bool` | Whether this is the device's status sensor |
+    | `DisabledByDefault` | `bool` | Whether entity is disabled by default |
+    | `EntityCategory` | `pb.EntityCategory` | Entity category |
+    | `DeviceID` | `uint32` | Associated device ID |
+    | `State` | `bool` | Latest received state |
+    | `MissingState` | `bool` | `true` until the first state update is received |
+  </Accordion>
+
+  <Accordion title="SwitchEntity">
+    Binary output (on/off) that can be controlled.
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `Key` | `uint32` | Stable entity identifier |
+    | `Name` | `string` | Human-readable name |
+    | `ObjectID` | `string` | Entity object ID |
+    | `Icon` | `string` | Optional icon string |
+    | `AssumedState` | `bool` | Whether state is assumed rather than reported |
+    | `DeviceClass` | `string` | e.g. `outlet`, `switch` |
+    | `DisabledByDefault` | `bool` | Whether entity is disabled by default |
+    | `EntityCategory` | `pb.EntityCategory` | Entity category |
+    | `DeviceID` | `uint32` | Associated device ID |
+    | `State` | `bool` | Latest received state (`true` = on) |
+
+    Use [`SetSwitch`](/api/commands#setswitch) to control a switch.
+  </Accordion>
+
+  <Accordion title="LightEntity">
+    Light output with optional colour, brightness, and effect support.
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `Key` | `uint32` | Stable entity identifier |
+    | `Name` | `string` | Human-readable name |
+    | `ObjectID` | `string` | Entity object ID |
+    | `SupportedColorModes` | `[]pb.ColorMode` | Supported colour modes |
+    | `MinMireds` | `float32` | Minimum colour temperature (mireds) |
+    | `MaxMireds` | `float32` | Maximum colour temperature (mireds) |
+    | `Effects` | `[]string` | Available effect names |
+    | `State` | `bool` | On/off state |
+    | `Brightness` | `float32` | Brightness (0.0–1.0) |
+    | `ColorMode` | `pb.ColorMode` | Active colour mode |
+    | `ColorBrightness` | `float32` | Colour brightness (0.0–1.0) |
+    | `Red` | `float32` | Red channel (0.0–1.0) |
+    | `Green` | `float32` | Green channel (0.0–1.0) |
+    | `Blue` | `float32` | Blue channel (0.0–1.0) |
+    | `White` | `float32` | White channel (0.0–1.0) |
+    | `ColorTemperature` | `float32` | Colour temperature (mireds) |
+    | `ColdWhite` | `float32` | Cold white channel (0.0–1.0) |
+    | `WarmWhite` | `float32` | Warm white channel (0.0–1.0) |
+    | `Effect` | `string` | Active effect name |
+
+    Use [`SetLight`](/api/commands#setlight) to control a light.
+  </Accordion>
+
+  <Accordion title="CoverEntity">
+    Motorised cover (blind, shutter, garage door).
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `Key` | `uint32` | Stable entity identifier |
+    | `Name` | `string` | Human-readable name |
+    | `ObjectID` | `string` | Entity object ID |
+    | `AssumedState` | `bool` | Whether state is assumed |
+    | `SupportsPosition` | `bool` | Whether position control is supported |
+    | `SupportsTilt` | `bool` | Whether tilt control is supported |
+    | `SupportsStop` | `bool` | Whether stop command is supported |
+    | `DeviceClass` | `string` | e.g. `blind`, `garage`, `shutter` |
+    | `Position` | `float32` | Current position (0.0 = closed, 1.0 = open) |
+    | `Tilt` | `float32` | Current tilt (0.0–1.0) |
+    | `CurrentOperation` | `pb.CoverOperation` | Active operation (opening, closing, idle) |
+
+    Use [`SetCover`](/api/commands#setcover) or [`SetCoverPosition`](/api/commands#setcoverposition) to control a cover.
+  </Accordion>
+
+  <Accordion title="FanEntity">
+    Fan with optional speed, oscillation, and direction.
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `Key` | `uint32` | Stable entity identifier |
+    | `Name` | `string` | Human-readable name |
+    | `SupportsOscillation` | `bool` | Whether oscillation is supported |
+    | `SupportsSpeed` | `bool` | Whether speed control is supported |
+    | `SupportsDirection` | `bool` | Whether direction control is supported |
+    | `SupportedSpeedCount` | `int32` | Number of discrete speed levels |
+    | `SupportedPresetModes` | `[]string` | Available preset mode names |
+    | `State` | `bool` | On/off state |
+    | `Oscillating` | `bool` | Whether oscillating |
+    | `Direction` | `pb.FanDirection` | Rotation direction |
+    | `SpeedLevel` | `int32` | Current speed level |
+    | `PresetMode` | `string` | Active preset mode |
+
+    Use [`SetFan`](/api/commands#setfan) to control a fan.
+  </Accordion>
+
+  <Accordion title="ClimateEntity">
+    Climate / HVAC unit with temperature, humidity, fan modes, and swing modes.
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `Key` | `uint32` | Stable entity identifier |
+    | `Name` | `string` | Human-readable name |
+    | `SupportedModes` | `[]pb.ClimateMode` | Available modes |
+    | `VisualMinTemperature` | `float32` | Minimum displayable temperature |
+    | `VisualMaxTemperature` | `float32` | Maximum displayable temperature |
+    | `SupportedFanModes` | `[]pb.ClimateFanMode` | Available fan modes |
+    | `SupportedSwingModes` | `[]pb.ClimateSwingMode` | Available swing modes |
+    | `SupportedPresets` | `[]pb.ClimatePreset` | Available presets |
+    | `Mode` | `pb.ClimateMode` | Active climate mode |
+    | `CurrentTemperature` | `float32` | Current measured temperature |
+    | `TargetTemperature` | `float32` | Target temperature setpoint |
+    | `Action` | `pb.ClimateAction` | Current action (heating, cooling, idle, …) |
+    | `FanMode` | `pb.ClimateFanMode` | Active fan mode |
+    | `SwingMode` | `pb.ClimateSwingMode` | Active swing mode |
+    | `CurrentHumidity` | `float32` | Current measured humidity |
+    | `TargetHumidity` | `float32` | Target humidity setpoint |
+
+    Use [`SetClimate`](/api/commands#setclimate) to control a climate entity.
+  </Accordion>
+
+  <Accordion title="NumberEntity">
+    Numeric input within a defined range.
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `Key` | `uint32` | Stable entity identifier |
+    | `Name` | `string` | Human-readable name |
+    | `MinValue` | `float32` | Minimum accepted value |
+    | `MaxValue` | `float32` | Maximum accepted value |
+    | `Step` | `float32` | Increment step |
+    | `UnitOfMeasurement` | `string` | Unit label |
+    | `Mode` | `pb.NumberMode` | Display mode (auto, box, slider) |
+    | `DeviceClass` | `string` | Device class hint |
+    | `State` | `float32` | Current value |
+    | `MissingState` | `bool` | `true` until first state is received |
+
+    Use [`SetNumber`](/api/commands#setnumber) to set the value.
+  </Accordion>
+
+  <Accordion title="SelectEntity">
+    Dropdown option selector.
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `Key` | `uint32` | Stable entity identifier |
+    | `Name` | `string` | Human-readable name |
+    | `Options` | `[]string` | Available option strings |
+    | `State` | `string` | Currently selected option |
+    | `MissingState` | `bool` | `true` until first state is received |
+
+    Use [`SetSelect`](/api/commands#setselect) to set the value.
+  </Accordion>
+
+  <Accordion title="SirenEntity">
+    Audible alarm / siren with optional tone, duration, and volume.
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `Key` | `uint32` | Stable entity identifier |
+    | `Name` | `string` | Human-readable name |
+    | `Tones` | `[]string` | Available tone names |
+    | `SupportsDuration` | `bool` | Whether duration is configurable |
+    | `SupportsVolume` | `bool` | Whether volume is configurable |
+    | `State` | `bool` | On/off state |
+
+    Use [`SetSiren`](/api/commands#setsiren) to control a siren.
+  </Accordion>
+
+  <Accordion title="LockEntity">
+    Lock with optional code support.
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `Key` | `uint32` | Stable entity identifier |
+    | `Name` | `string` | Human-readable name |
+    | `AssumedState` | `bool` | Whether state is assumed |
+    | `SupportsOpen` | `bool` | Whether an open command is supported |
+    | `RequiresCode` | `bool` | Whether a code is required to operate |
+    | `CodeFormat` | `string` | Regex pattern for acceptable codes |
+    | `State` | `pb.LockState` | Current state (locked, unlocked, jammed, …) |
+
+    Use [`SetLock`](/api/commands#setlock) to control a lock.
+  </Accordion>
+
+  <Accordion title="ButtonEntity">
+    Stateless momentary button. Has no state fields — pressing a button triggers an action on the device.
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `Key` | `uint32` | Stable entity identifier |
+    | `Name` | `string` | Human-readable name |
+    | `DeviceClass` | `string` | e.g. `restart`, `update` |
+
+    Use [`PressButton`](/api/commands#pressbutton) to trigger a button.
+  </Accordion>
+
+  <Accordion title="MediaPlayerEntity">
+    Media player with playback control and volume.
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `Key` | `uint32` | Stable entity identifier |
+    | `Name` | `string` | Human-readable name |
+    | `SupportsPause` | `bool` | Whether pause is supported |
+    | `State` | `pb.MediaPlayerState` | Current state (idle, playing, paused, …) |
+    | `Volume` | `float32` | Current volume (0.0–1.0) |
+    | `Muted` | `bool` | Whether muted |
+
+    Use [`SetMediaPlayer`](/api/commands#setmediaplayer) to control a media player.
+  </Accordion>
+
+  <Accordion title="WaterHeaterEntity">
+    Water heater with temperature setpoints and mode selection.
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `Key` | `uint32` | Stable entity identifier |
+    | `Name` | `string` | Human-readable name |
+    | `MinTemperature` | `float32` | Minimum setpoint |
+    | `MaxTemperature` | `float32` | Maximum setpoint |
+    | `TargetTemperatureStep` | `float32` | Increment step |
+    | `SupportedModes` | `[]pb.WaterHeaterMode` | Available modes |
+    | `CurrentTemperature` | `float32` | Current measured temperature |
+    | `TargetTemperature` | `float32` | Target setpoint |
+    | `Mode` | `pb.WaterHeaterMode` | Active mode |
+  </Accordion>
+
+  <Accordion title="TextSensorEntity">
+    Sensor that reports a string value.
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `Key` | `uint32` | Stable entity identifier |
+    | `Name` | `string` | Human-readable name |
+    | `DeviceClass` | `string` | Device class hint |
+    | `State` | `string` | Latest received value |
+    | `MissingState` | `bool` | `true` until first state is received |
+  </Accordion>
+</AccordionGroup>

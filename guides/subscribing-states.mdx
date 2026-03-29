@@ -1,0 +1,93 @@
+---
+title: "Subscribing to state updates"
+description: "Receive real-time state changes from ESPHome entity state subscriptions"
+---
+
+After connecting, you can subscribe to live state updates from the device. The device streams a state message whenever any entity value changes. The client calls your handler for each message and simultaneously updates the entity registry cache.
+
+## Function signature
+
+```go
+func (c *Client) SubscribeStates(handler func(msg proto.Message)) (unsubscribe func(), err error)
+```
+
+`SubscribeStates` sends a `SubscribeStatesRequest` to the device, registers handlers for all known state response types, and returns an `unsubscribe` function. Call the unsubscribe function to deregister all handlers.
+
+## Handling state messages
+
+The handler receives a `proto.Message`. Use a type switch to dispatch to the correct concrete type. The `Key` field on each message matches the entity key from `ListEntities`.
+
+```go
+import (
+    "fmt"
+    "log"
+
+    esphome "github.com/richard87/esphome-apiclient"
+    "github.com/richard87/esphome-apiclient/pb"
+    "google.golang.org/protobuf/proto"
+)
+
+unsubscribe, err := client.SubscribeStates(func(msg proto.Message) {
+    switch m := msg.(type) {
+    case *pb.SensorStateResponse:
+        entity := client.Entities().ByKey(m.Key)
+        fmt.Printf("sensor %s = %.4g\n", entity.GetName(), m.State)
+    case *pb.BinarySensorStateResponse:
+        fmt.Printf("binary_sensor 0x%08X = %v\n", m.Key, m.State)
+    case *pb.SwitchStateResponse:
+        fmt.Printf("switch 0x%08X = %v\n", m.Key, m.State)
+    case *pb.LightStateResponse:
+        fmt.Printf("light 0x%08X on=%v brightness=%.2f\n", m.Key, m.State, m.Brightness)
+    case *pb.ClimateStateResponse:
+        fmt.Printf("climate 0x%08X mode=%v temp=%.1f\n", m.Key, m.Mode, m.CurrentTemperature)
+    }
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer unsubscribe()
+```
+
+<Tip>
+Call `ListEntities` before `SubscribeStates` so the entity registry is populated when state messages arrive. This lets you resolve entity names from keys inside the handler.
+</Tip>
+
+## Unsubscribing
+
+The returned `unsubscribe` function removes all message handlers registered by `SubscribeStates` and clears the saved handler so it will not be re-registered on reconnect.
+
+```go
+unsubscribe, err := client.SubscribeStates(handler)
+// ...
+unsubscribe() // stop receiving state updates
+```
+
+## Reconnect behaviour
+
+The handler passed to `SubscribeStates` is saved internally. If auto-reconnect is enabled and the connection is re-established, the client automatically calls `ListEntities` and re-registers the saved handler without any action required from your code. See [Auto-reconnect](/guides/reconnect) for configuration details.
+
+<Note>
+State handlers run on the client's read loop goroutine. Do not perform blocking operations (database writes, HTTP requests, long computations) directly inside the handler. Offload heavy work to a separate goroutine using a channel or `go func()`.
+</Note>
+
+## Supported state response types
+
+The following `proto.Message` types can appear in the handler:
+
+| Type | Domain |
+|---|---|
+| `*pb.SensorStateResponse` | sensor |
+| `*pb.BinarySensorStateResponse` | binary_sensor |
+| `*pb.SwitchStateResponse` | switch |
+| `*pb.LightStateResponse` | light |
+| `*pb.CoverStateResponse` | cover |
+| `*pb.FanStateResponse` | fan |
+| `*pb.ClimateStateResponse` | climate |
+| `*pb.NumberStateResponse` | number |
+| `*pb.SelectStateResponse` | select |
+| `*pb.SirenStateResponse` | siren |
+| `*pb.LockStateResponse` | lock |
+| `*pb.MediaPlayerStateResponse` | media_player |
+| `*pb.TextSensorStateResponse` | text_sensor |
+| `*pb.CameraImageResponse` | camera |
+| `*pb.WaterHeaterStateResponse` | water_heater |

@@ -1,0 +1,173 @@
+---
+title: "Bluetooth proxy"
+description: "Use ESPHome devices as Bluetooth LE proxies for advertisement scanning and GATT operations"
+---
+
+<Warning>
+  Bluetooth proxy support is experimental. The API surface may change between ESPHome releases.
+</Warning>
+
+<Note>
+  Your ESPHome device must have the `bluetooth_proxy` component enabled in its YAML configuration for any of these methods to work.
+</Note>
+
+## Overview
+
+ESPHome devices with the `bluetooth_proxy` component enabled can relay Bluetooth Low Energy (BLE) operations to API clients. This lets you scan for nearby BLE advertisements, connect to peripheral devices, and read or write GATT characteristics — all through the ESPHome device acting as a proxy.
+
+## SubscribeBluetoothAdvertisements
+
+```go
+func (c *Client) SubscribeBluetoothAdvertisements(handler func(proto.Message)) (func(), error)
+```
+
+Subscribes to BLE advertisement packets relayed by the ESPHome device. The handler is called for both message types:
+
+- **Legacy** `BluetoothLEAdvertisementResponse` (message ID 67) — one advertisement per message
+- **Newer** `BluetoothLERawAdvertisementsResponse` (message ID 93) — multiple advertisements batched per message
+
+The returned function unsubscribes both handlers and sends an `UnsubscribeBluetoothLEAdvertisementsRequest` to the device.
+
+```go
+unsubscribe, err := client.SubscribeBluetoothAdvertisements(func(msg proto.Message) {
+    switch adv := msg.(type) {
+    case *pb.BluetoothLERawAdvertisementsResponse:
+        fmt.Printf("BLE: %d devices\n", len(adv.Advertisements))
+    case *pb.BluetoothLEAdvertisementResponse:
+        fmt.Printf("BLE (legacy): %X\n", adv.Address)
+    }
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer unsubscribe()
+```
+
+## BluetoothScannerSetMode
+
+```go
+func (c *Client) BluetoothScannerSetMode(mode pb.BluetoothScannerMode) error
+```
+
+Sets the BLE scanner mode on the device. Use `pb.BluetoothScannerMode_BLUETOOTH_SCANNER_MODE_PASSIVE` for passive scanning (observe only) or `pb.BluetoothScannerMode_BLUETOOTH_SCANNER_MODE_ACTIVE` for active scanning (sends scan requests to peripherals).
+
+```go
+err := client.BluetoothScannerSetMode(pb.BluetoothScannerMode_BLUETOOTH_SCANNER_MODE_ACTIVE)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+## SubscribeBluetoothConnectionsFree
+
+```go
+func (c *Client) SubscribeBluetoothConnectionsFree(handler func(*pb.BluetoothConnectionsFreeResponse)) (func(), error)
+```
+
+Subscribes to updates on free Bluetooth connection slots. The handler is called whenever the number of available connection slots changes on the device.
+
+```go
+unsubscribe, err := client.SubscribeBluetoothConnectionsFree(func(resp *pb.BluetoothConnectionsFreeResponse) {
+    fmt.Printf("Free BLE connections: %d (limit: %d)\n", resp.Free, resp.Limit)
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer unsubscribe()
+```
+
+## BluetoothConnect
+
+```go
+func (c *Client) BluetoothConnect(address uint64) error
+```
+
+Connects to a BLE peripheral through the ESPHome proxy. The `address` parameter is the BLE MAC address encoded as a `uint64` (e.g., `0xAABBCCDDEEFF`). Uses the `CONNECT_V3_WITH_CACHE` request type and waits up to 30 seconds for the connection to be established.
+
+## BluetoothDisconnect
+
+```go
+func (c *Client) BluetoothDisconnect(address uint64) error
+```
+
+Disconnects from a connected BLE peripheral. Waits up to 10 seconds for the disconnection to complete.
+
+## BluetoothGATTGetServices
+
+```go
+func (c *Client) BluetoothGATTGetServices(address uint64) ([]*pb.BluetoothGATTService, error)
+```
+
+Returns all GATT services and their characteristics for the connected peripheral at `address`. Waits up to 30 seconds for the device to send all services followed by a `BluetoothGATTGetServicesDoneResponse`.
+
+## BluetoothGATTRead
+
+```go
+func (c *Client) BluetoothGATTRead(address uint64, handle uint32) ([]byte, error)
+```
+
+Reads a GATT characteristic identified by its attribute `handle`. Returns the raw bytes of the characteristic value. Times out after 10 seconds if no response is received.
+
+## BluetoothGATTWrite
+
+```go
+func (c *Client) BluetoothGATTWrite(address uint64, handle uint32, data []byte, response bool) error
+```
+
+Writes `data` to the GATT characteristic at `handle`.
+
+- `response: true` — waits for a write-response acknowledgement from the peripheral (times out after 10 seconds)
+- `response: false` — fire-and-forget write with no acknowledgement (write-without-response)
+
+## BluetoothGATTNotify
+
+```go
+func (c *Client) BluetoothGATTNotify(address uint64, handle uint32, enable bool, handler func([]byte)) (func(), error)
+```
+
+Enables or disables GATT notifications for a characteristic at `handle`. When `enable` is `true` and a `handler` is provided, the handler is called with the raw notification bytes each time the peripheral sends a notification. The returned function stops receiving notifications.
+
+```go
+stopNotify, err := client.BluetoothGATTNotify(0xAABBCCDDEEFF, 0x0016, true, func(data []byte) {
+    fmt.Printf("Notification: %x\n", data)
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer stopNotify()
+```
+
+## Full GATT workflow example
+
+The following example connects to a BLE device, enumerates its GATT services and characteristics, and reads a specific characteristic value.
+
+```go
+const deviceAddr uint64 = 0xAABBCCDDEEFF
+
+// Connect to a BLE device through the ESPHome proxy
+err := client.BluetoothConnect(deviceAddr)
+if err != nil {
+    log.Fatal(err)
+}
+defer client.BluetoothDisconnect(deviceAddr)
+
+// Enumerate GATT services
+services, err := client.BluetoothGATTGetServices(deviceAddr)
+if err != nil {
+    log.Fatal(err)
+}
+
+for _, svc := range services {
+    fmt.Printf("Service: %s\n", svc.Uuid)
+    for _, char := range svc.Characteristics {
+        fmt.Printf("  Characteristic: %s handle=%d\n", char.Uuid, char.Handle)
+    }
+}
+
+// Read a characteristic by handle
+data, err := client.BluetoothGATTRead(deviceAddr, 0x0015)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Value: %x\n", data)
+```

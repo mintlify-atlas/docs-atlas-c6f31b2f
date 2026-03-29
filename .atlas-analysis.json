@@ -1,0 +1,118 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "ESPHome API Client",
+  "projectDescription": "A pure Go client library for communicating with ESPHome devices over TCP using the Native API and Protocol Buffers.",
+  "theme": "luma",
+  "primaryColor": "#14bbf3",
+  "lightColor": "#63cce9",
+  "darkColor": "#fcf4fc",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Library Guide",
+            "pages": [
+              "guides/connecting",
+              "guides/entities",
+              "guides/subscribing-states",
+              "guides/sending-commands",
+              "guides/logs",
+              "guides/reconnect"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/bluetooth-proxy",
+              "advanced/encryption",
+              "advanced/architecture",
+              "advanced/protocol"
+            ]
+          },
+          {
+            "group": "CLI Tool",
+            "pages": [
+              "cli/overview",
+              "cli/commands"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Client",
+            "pages": [
+              "api/client",
+              "api/options",
+              "api/entities",
+              "api/commands",
+              "api/bluetooth"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Pure Go implementation with no CGO dependencies",
+    "Noise protocol encryption (Noise_NNpsk0_25519_ChaChaPoly_SHA256)",
+    "Automatic reconnection with exponential backoff",
+    "Type-safe entity registry for all ESPHome domains",
+    "Real-time state subscriptions via callback handlers",
+    "Bluetooth proxy support (advertisements, GATT, connections)",
+    "Built-in keepalive with configurable ping intervals",
+    "Bundled CLI tool for interactive device control"
+  ],
+  "publicApiSurface": [
+    "Dial(address string, timeout time.Duration, opts ...Option) (*Client, error)",
+    "DialWithContext(ctx context.Context, address string, timeout time.Duration, opts ...Option) (*Client, error)",
+    "(*Client).DeviceInfo() (*pb.DeviceInfoResponse, error)",
+    "(*Client).ListEntities() ([]proto.Message, error)",
+    "(*Client).SubscribeStates(handler func(msg proto.Message)) (unsubscribe func(), err error)",
+    "(*Client).SubscribeLogs(level pb.LogLevel, handler func(msg *pb.SubscribeLogsResponse)) (func(), error)",
+    "(*Client).SendCommand(cmd proto.Message) error",
+    "(*Client).SetSwitch(key uint32, state bool) error",
+    "(*Client).SetLight(key uint32, opts LightCommandOpts) error",
+    "(*Client).SetClimate(key uint32, opts ClimateCommandOpts) error",
+    "(*Client).SetNumber(key uint32, value float32) error",
+    "(*Client).SetSelect(key uint32, value string) error",
+    "(*Client).PressButton(key uint32) error",
+    "(*Client).SetCover(key uint32, opts CoverCommandOpts) error",
+    "(*Client).SetFan(key uint32, opts FanCommandOpts) error",
+    "(*Client).SetSiren(key uint32, opts SirenCommandOpts) error",
+    "(*Client).SetLock(key uint32, command pb.LockCommand, code string) error",
+    "(*Client).SetMediaPlayer(key uint32, opts MediaPlayerCommandOpts) error",
+    "(*Client).Ping() error",
+    "(*Client).Disconnect() error",
+    "(*Client).Close() error",
+    "(*Client).Connected() bool",
+    "(*Client).Entities() *EntityRegistry",
+    "(*Client).On(msgType uint32, handler MessageHandler) func()",
+    "(*Client).SubscribeBluetoothAdvertisements(handler func(proto.Message)) (func(), error)",
+    "(*Client).BluetoothConnect(address uint64) error",
+    "(*Client).BluetoothDisconnect(address uint64) error",
+    "(*Client).BluetoothGATTGetServices(address uint64) ([]*pb.BluetoothGATTService, error)",
+    "(*Client).BluetoothGATTRead(address uint64, handle uint32) ([]byte, error)",
+    "(*Client).BluetoothGATTWrite(address uint64, handle uint32, data []byte, response bool) error",
+    "(*Client).BluetoothGATTNotify(address uint64, handle uint32, enable bool, handler func([]byte)) (func(), error)",
+    "WithEncryptionKey(key string) Option",
+    "WithClientInfo(info string) Option",
+    "WithReconnect(interval time.Duration) Option",
+    "WithKeepalive(interval time.Duration) Option",
+    "WithOnConnect(fn func()) Option",
+    "WithOnDisconnect(fn func()) Option",
+    "WithLogger(l *log.Logger) Option"
+  ]
+}

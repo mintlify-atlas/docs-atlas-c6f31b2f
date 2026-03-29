@@ -1,97 +1,93 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "ESPHome API Client"
+description: "A pure Go client library for communicating with ESPHome devices over TCP using the Native API and Protocol Buffers."
 ---
 
-## Setting up
+Connect to ESPHome devices directly from Go applications using the native API. This library handles TCP connections, Noise protocol encryption, entity discovery, real-time state subscriptions, and device commands — all with zero CGO dependencies.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Connect to your first ESPHome device in minutes
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Installation" icon="package" href="/installation">
+    Add the library to your Go project
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Library Guide" icon="book" href="/guides/connecting">
+    Learn how to connect, discover entities, and stream state updates
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="API Reference" icon="code" href="/api/client">
+    Full reference for all public types and methods
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What you can do
 
-Everything you need to create world-class documentation.
+<CardGroup cols={2}>
+  <Card title="Read sensor data" icon="gauge">
+    Subscribe to live state updates from sensors, binary sensors, text sensors, and more
+  </Card>
+  <Card title="Control devices" icon="toggle-on">
+    Send commands to switches, lights, fans, climate controllers, locks, and media players
+  </Card>
+  <Card title="Stream device logs" icon="terminal">
+    Receive real-time log output from ESPHome firmware at configurable verbosity levels
+  </Card>
+  <Card title="Bluetooth proxy" icon="bluetooth">
+    Use ESPHome devices as Bluetooth proxies for BLE advertisement scanning and GATT operations
+  </Card>
+  <Card title="Noise encryption" icon="lock">
+    Secure all communication with Noise protocol encryption using a pre-shared key from your ESPHome config
+  </Card>
+  <Card title="Auto-reconnect" icon="rotate">
+    Automatically reconnect with exponential backoff and re-subscribe after connection loss
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Get started
 
-## Need inspiration?
+<Steps>
+  <Step title="Install the module">
+    ```bash
+    go get github.com/richard87/esphome-apiclient
+    ```
+  </Step>
+  <Step title="Connect to a device">
+    ```go
+    import (
+        esphome "github.com/richard87/esphome-apiclient"
+        "time"
+    )
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+    client, err := esphome.Dial("mydevice.local:6053", 5*time.Second,
+        esphome.WithEncryptionKey("base64-noise-psk"),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer client.Close()
+    ```
+  </Step>
+  <Step title="Discover entities and stream states">
+    ```go
+    client.ListEntities()
+
+    client.SubscribeStates(func(msg proto.Message) {
+        switch m := msg.(type) {
+        case *pb.SensorStateResponse:
+            entity := client.Entities().ByKey(m.Key)
+            fmt.Printf("sensor %s = %.4g\n", entity.GetName(), m.State)
+        }
+    })
+    ```
+  </Step>
+  <Step title="Send a command">
+    ```go
+    // Turn a switch on
+    client.SetSwitch(0x12345678, true)
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  ESPHome devices must have the [Native API component](https://esphome.io/components/api.html) enabled in their firmware configuration. For encrypted connections, copy the `encryption.key` value from your ESPHome YAML.
+</Note>

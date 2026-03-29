@@ -1,0 +1,99 @@
+---
+title: "Noise encryption"
+description: "Secure connections using the Noise protocol with a pre-shared key"
+---
+
+<Warning>
+  Unencrypted (plain) connections transmit all data in cleartext, including sensor values and commands. Only use plain connections on isolated, trusted local networks.
+</Warning>
+
+## What is Noise encryption
+
+ESPHome uses the **`Noise_NNpsk0_25519_ChaChaPoly_SHA256`** cipher suite to secure API connections. This is a well-established authenticated encryption protocol with the following properties:
+
+- **No certificates required** — authentication is based solely on a pre-shared 32-byte key (PSK)
+- **Perfect forward secrecy** — ephemeral X25519 key pairs are generated for each session
+- **Authenticated encryption** — ChaCha20-Poly1305 provides both confidentiality and integrity
+
+The Noise handshake occurs at the TCP level, before any protobuf messages are exchanged. Once the handshake completes, all subsequent frames are transparently encrypted and decrypted by the transport layer. The implementation uses [`github.com/flynn/noise`](https://github.com/flynn/noise).
+
+## Getting your encryption key
+
+Find the encryption key in your ESPHome device YAML configuration:
+
+```yaml
+api:
+  encryption:
+    key: "your-base64-key-here="
+```
+
+The key is a base64-encoded 32-byte value. You can find or regenerate it in the ESPHome dashboard under your device's configuration.
+
+## Enabling encryption in the client
+
+Pass `WithEncryptionKey` when dialing:
+
+```go
+client, err := esphome.Dial("mydevice.local:6053", 5*time.Second,
+    esphome.WithEncryptionKey("your-base64-key-here="),
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer client.Close()
+```
+
+The library decodes the key with `base64.StdEncoding.DecodeString` before passing the 32-byte PSK to the Noise handshake. An invalid base64 string causes an immediate error before any TCP connection is attempted.
+
+## Key format
+
+The encryption key must be a standard base64-encoded string (with padding) that decodes to exactly 32 bytes. For example, to generate a new key:
+
+```bash
+openssl rand -base64 32
+```
+
+## Device name validation
+
+<Tip>
+  Use `WithExpectedName` as an extra layer of defence. If an attacker intercepts your connection and presents the correct PSK with a different device name, the handshake will be rejected.
+</Tip>
+
+`WithExpectedName` validates the device name reported by the ESPHome device during the Noise handshake. If the name does not match, the connection is rejected before any protobuf messages are exchanged.
+
+```go
+client, err := esphome.Dial("mydevice.local:6053", 5*time.Second,
+    esphome.WithEncryptionKey("your-base64-key-here="),
+    esphome.WithExpectedName("my-sensor-node"),
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer client.Close()
+```
+
+The `expectedName` is compared against the null-terminated server name that the device sends in its Noise server hello. If the names differ, `Dial` returns an error such as:
+
+```
+noise handshake failed: server name mismatch: expected "my-sensor-node", got "other-device"
+```
+
+## Plain connections
+
+Omit `WithEncryptionKey` to connect without encryption:
+
+```go
+client, err := esphome.Dial("mydevice.local:6053", 5*time.Second)
+```
+
+Plain connections use a bare TCP socket with no handshake overhead, which can be useful during development or on air-gapped networks where you control all traffic.
+
+## Common connection errors
+
+| Error message | Cause |
+|---|---|
+| `invalid encryption key: illegal base64 data` | The key string is not valid base64 |
+| `noise PSK must be 32 bytes, got N` | The decoded key is not 32 bytes |
+| `invalid encryption key: Handshake MAC failure` | The PSK does not match the device |
+| `server name mismatch: expected X, got Y` | `WithExpectedName` check failed |
+| `device is using plaintext protocol` | Client sent a Noise hello to a plain device |

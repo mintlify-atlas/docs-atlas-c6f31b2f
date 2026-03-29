@@ -1,0 +1,347 @@
+---
+title: "Client"
+description: "Reference for the Client type, Dial functions, and core methods"
+---
+
+The `Client` type manages the TCP connection to an ESPHome device, handles the API handshake, dispatches incoming messages to registered handlers, and runs background goroutines for keepalive and reconnection.
+
+## Connecting
+
+### Dial
+
+Connects to the specified address using `context.Background()`. A convenience wrapper around `DialWithContext`.
+
+```go
+func Dial(address string, timeout time.Duration, opts ...Option) (*Client, error)
+```
+
+<ParamField path="address" type="string" required>
+  Device address in `host:port` format. The default ESPHome API port is `6053`.
+</ParamField>
+
+<ParamField path="timeout" type="time.Duration" required>
+  Timeout for the TCP dial and API handshake. Does not limit the connection lifetime.
+</ParamField>
+
+<ParamField path="opts" type="...Option">
+  Zero or more [options](/api/options) to configure encryption, keepalive, reconnect, and callbacks.
+</ParamField>
+
+**Returns** `(*Client, error)` — a connected client, or an error if the dial or handshake fails.
+
+### DialWithContext
+
+Connects to the specified address with a parent context. When the context is cancelled, all background goroutines (read loop, keepalive, reconnect) exit cleanly.
+
+```go
+func DialWithContext(ctx context.Context, address string, timeout time.Duration, opts ...Option) (*Client, error)
+```
+
+<ParamField path="ctx" type="context.Context" required>
+  Parent context. Cancelling it stops all background goroutines.
+</ParamField>
+
+<ParamField path="address" type="string" required>
+  Device address in `host:port` format.
+</ParamField>
+
+<ParamField path="timeout" type="time.Duration" required>
+  Timeout for the TCP dial and API handshake.
+</ParamField>
+
+<ParamField path="opts" type="...Option">
+  Zero or more [options](/api/options).
+</ParamField>
+
+**Returns** `(*Client, error)`.
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+
+client, err := esphome.DialWithContext(ctx, "mydevice.local:6053", 5*time.Second,
+    esphome.WithEncryptionKey("base64-noise-psk"),
+    esphome.WithReconnect(10*time.Second),
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer client.Close()
+```
+
+## Lifecycle
+
+### Close
+
+Cancels the internal context, stops all background goroutines, and closes the underlying transport. Safe to call multiple times.
+
+```go
+func (c *Client) Close() error
+```
+
+### Disconnect
+
+Sends a `DisconnectRequest` to the device, waits up to 2 seconds for the `DisconnectResponse`, then calls `Close`. Also disables automatic reconnection so the connection does not come back up after the graceful shutdown.
+
+```go
+func (c *Client) Disconnect() error
+```
+
+### Connected
+
+Reports whether the client currently has an active connection. The value is updated atomically by the read loop.
+
+```go
+func (c *Client) Connected() bool
+```
+
+### Done
+
+Returns a channel that is closed when the read loop exits. Use this to block until the connection drops.
+
+```go
+func (c *Client) Done() <-chan struct{}
+```
+
+```go
+// Block until disconnected
+<-client.Done()
+fmt.Println("connection closed")
+```
+
+## Device metadata
+
+These methods return information populated during the API handshake. They are available immediately after a successful `Dial` call.
+
+### Name
+
+Returns the device name reported in the `HelloResponse`.
+
+```go
+func (c *Client) Name() string
+```
+
+### ServerInfo
+
+Returns the server info string reported in the `HelloResponse` (typically `esphome <version>`).
+
+```go
+func (c *Client) ServerInfo() string
+```
+
+### APIVersion
+
+Returns the major and minor API version negotiated during the handshake.
+
+```go
+func (c *Client) APIVersion() (major, minor uint32)
+```
+
+```go
+major, minor := client.APIVersion()
+fmt.Printf("API version: %d.%d\n", major, minor)
+```
+
+## Device operations
+
+### DeviceInfo
+
+Fetches full device information from the device. Sends a `DeviceInfoRequest` and waits up to 5 seconds for the response.
+
+```go
+func (c *Client) DeviceInfo() (*pb.DeviceInfoResponse, error)
+```
+
+**Returns** a `*pb.DeviceInfoResponse` with fields including `Name`, `MacAddress`, `EsphomeVersion`, `Model`, `ProjectName`, `ProjectVersion`, and `CompilationTime`.
+
+```go
+info, err := client.DeviceInfo()
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Connected to %s (ESPHome %s)\n", info.Name, info.EsphomeVersion)
+```
+
+### ListEntities
+
+Sends a `ListEntitiesRequest` and collects all entity response messages until the device sends `ListEntitiesDoneResponse`. Entity definitions are also stored in the client's `EntityRegistry`. Waits up to 10 seconds.
+
+```go
+func (c *Client) ListEntities() ([]proto.Message, error)
+```
+
+**Returns** a slice of all raw entity protobuf messages.
+
+### ListEntitiesWithTimeout
+
+Like `ListEntities` but with a configurable timeout.
+
+```go
+func (c *Client) ListEntitiesWithTimeout(timeout time.Duration) ([]proto.Message, error)
+```
+
+<ParamField path="timeout" type="time.Duration" required>
+  Maximum time to wait for `ListEntitiesDoneResponse`.
+</ParamField>
+
+### SubscribeStates
+
+Sends a `SubscribeStatesRequest` and registers handlers for all state response message types. The `handler` is called for every incoming state message. State updates are also applied to the `EntityRegistry` automatically.
+
+The handler is saved internally so it can be re-registered transparently after an automatic reconnect.
+
+```go
+func (c *Client) SubscribeStates(handler func(msg proto.Message)) (unsubscribe func(), err error)
+```
+
+<ParamField path="handler" type="func(msg proto.Message)" required>
+  Called for every incoming state response. Type-assert the message to access domain-specific fields.
+</ParamField>
+
+**Returns** an unsubscribe function and an error. Call the unsubscribe function to remove all handlers and stop receiving updates.
+
+```go
+unsubscribe, err := client.SubscribeStates(func(msg proto.Message) {
+    switch m := msg.(type) {
+    case *pb.SensorStateResponse:
+        entity := client.Entities().ByKey(m.Key)
+        fmt.Printf("sensor %s = %.4g\n", entity.GetName(), m.State)
+    case *pb.SwitchStateResponse:
+        fmt.Printf("switch 0x%08X = %v\n", m.Key, m.State)
+    }
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer unsubscribe()
+```
+
+### Entities
+
+Returns the client's `EntityRegistry`. The registry is populated by `ListEntities` and updated by `SubscribeStates`.
+
+```go
+func (c *Client) Entities() *EntityRegistry
+```
+
+See [Entity registry](/api/entities) for the full registry API.
+
+## Ping
+
+### Ping
+
+Sends a `PingRequest` and waits up to 5 seconds for a `PingResponse`.
+
+```go
+func (c *Client) Ping() error
+```
+
+### PingWithTimeout
+
+Like `Ping` with a configurable timeout.
+
+```go
+func (c *Client) PingWithTimeout(timeout time.Duration) error
+```
+
+## Low-level API
+
+These methods are intended for advanced use cases such as implementing custom message handlers or sending protocol messages not covered by the higher-level API.
+
+### On
+
+Registers a handler for a specific message type ID. Returns a function that removes the handler when called.
+
+```go
+func (c *Client) On(msgType uint32, handler MessageHandler) func()
+```
+
+<ParamField path="msgType" type="uint32" required>
+  The ESPHome protocol message type ID to listen for.
+</ParamField>
+
+<ParamField path="handler" type="MessageHandler" required>
+  Called with the decoded `proto.Message` each time a matching message arrives.
+</ParamField>
+
+**Returns** a deregister function.
+
+### SendMessage
+
+Encodes and sends a protobuf message with the given type ID. Safe to call from multiple goroutines.
+
+```go
+func (c *Client) SendMessage(msg proto.Message, msgType uint32) error
+```
+
+<ParamField path="msg" type="proto.Message" required>
+  The protobuf message to send.
+</ParamField>
+
+<ParamField path="msgType" type="uint32" required>
+  The ESPHome protocol message type ID for this message.
+</ParamField>
+
+## Services
+
+ESPHome devices can expose custom services defined in the device YAML. These are discovered alongside entities via `ListEntities` and stored in the `ServiceRegistry`.
+
+### Services
+
+Returns the client's `ServiceRegistry`, which caches custom service definitions discovered via `ListEntities`.
+
+```go
+func (c *Client) Services() *ServiceRegistry
+```
+
+```go
+client.ListEntities()
+for _, svc := range client.Services().All() {
+    fmt.Printf("service: %s (key=0x%08X)\n", svc.Name, svc.Key)
+}
+```
+
+### ExecuteService
+
+Sends an `ExecuteServiceRequest` to invoke a custom ESPHome service by its numeric key.
+
+```go
+func (c *Client) ExecuteService(key uint32, args []*pb.ExecuteServiceArgument) error
+```
+
+<ParamField path="key" type="uint32" required>
+  The service key from `ServiceDefinition.Key` or the `ListEntitiesServicesResponse`.
+</ParamField>
+
+<ParamField path="args" type="[]*pb.ExecuteServiceArgument" required>
+  Argument values matching the declared argument schema of the service. Pass an empty slice for services with no arguments.
+</ParamField>
+
+### ExecuteServiceByName
+
+Looks up a service by name in the registry and executes it. Returns an error if no service with that name has been discovered.
+
+```go
+func (c *Client) ExecuteServiceByName(name string, args []*pb.ExecuteServiceArgument) error
+```
+
+<ParamField path="name" type="string" required>
+  The service name as declared in the ESPHome YAML (e.g. `"play_rtttl"`).
+</ParamField>
+
+<ParamField path="args" type="[]*pb.ExecuteServiceArgument" required>
+  Argument values matching the service's declared argument schema.
+</ParamField>
+
+```go
+client.ListEntities()
+
+// Execute a service that plays an RTTTL melody
+err := client.ExecuteServiceByName("play_rtttl", []*pb.ExecuteServiceArgument{
+    {Value: &pb.ExecuteServiceArgument_LegacyStringValue{LegacyStringValue: "Indiana:d=4,o=5,b=250:..."}},
+})
+```
+
+<Note>
+Call `ListEntities` before `ExecuteServiceByName` to populate the service registry. Services are automatically cleared and re-discovered on reconnect.
+</Note>

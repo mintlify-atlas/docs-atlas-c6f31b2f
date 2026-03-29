@@ -1,0 +1,288 @@
+---
+title: "Sending commands"
+description: "Control ESPHome devices by sending typed commands to entities"
+---
+
+The client provides typed convenience methods for every controllable entity domain. Each method accepts the entity `key` (a `uint32` from `ListEntities`) and a value or options struct. If `ListEntities` has been called, the key is validated against the registry before the command is sent.
+
+## Entity key validation
+
+When the entity registry is populated (after calling `ListEntities`), every command method validates the key:
+
+- `ErrEntityNotFound` — key does not exist in the registry
+- `ErrEntityTypeMismatch` — key exists but belongs to a different domain
+
+If the registry is empty (entities have not been listed), validation is skipped and the command is sent as-is.
+
+## Low-level: SendCommand
+
+`SendCommand` accepts any `pb.*CommandRequest` and resolves the message type ID automatically. Use this for entity types not covered by the typed methods, or when building commands programmatically.
+
+```go
+func (c *Client) SendCommand(cmd proto.Message) error
+```
+
+```go
+err := client.SendCommand(&pb.SwitchCommandRequest{
+    Key:   0x12345678,
+    State: true,
+})
+```
+
+## Typed command methods
+
+<Tabs>
+  <Tab title="Switches & buttons">
+    **SetSwitch** turns a switch on or off.
+
+    ```go
+    func (c *Client) SetSwitch(key uint32, state bool) error
+    ```
+
+    ```go
+    // Turn on
+    err := client.SetSwitch(key, true)
+
+    // Turn off
+    err := client.SetSwitch(key, false)
+    ```
+
+    **PressButton** triggers a stateless button entity.
+
+    ```go
+    func (c *Client) PressButton(key uint32) error
+    ```
+
+    ```go
+    err := client.PressButton(key)
+    ```
+  </Tab>
+
+  <Tab title="Lights">
+    **SetLight** sends a light command. Only fields whose corresponding `Has*` flag is `true` are transmitted; omitted fields are not changed on the device.
+
+    ```go
+    func (c *Client) SetLight(key uint32, opts LightCommandOpts) error
+    ```
+
+    ```go
+    // Turn on with warm amber colour at 75% brightness
+    err := client.SetLight(key, esphome.LightCommandOpts{
+        HasState:      true,
+        State:         true,
+        HasBrightness: true,
+        Brightness:    0.75,
+        HasRGB:        true,
+        Red:           1.0,
+        Green:         0.5,
+        Blue:          0.0,
+    })
+    ```
+
+    **LightCommandOpts fields:**
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `HasState` / `State` | `bool` | Power on or off |
+    | `HasBrightness` / `Brightness` | `float32` | Master brightness (0.0–1.0) |
+    | `HasColorMode` / `ColorMode` | `pb.ColorMode` | Active colour mode |
+    | `HasColorBrightness` / `ColorBrightness` | `float32` | Colour brightness (0.0–1.0) |
+    | `HasRGB` / `Red`, `Green`, `Blue` | `float32` | RGB values (0.0–1.0 each) |
+    | `HasWhite` / `White` | `float32` | White channel (0.0–1.0) |
+    | `HasColorTemperature` / `ColorTemperature` | `float32` | Colour temperature in mireds |
+    | `HasColdWhite` / `ColdWhite` | `float32` | Cold white channel (0.0–1.0) |
+    | `HasWarmWhite` / `WarmWhite` | `float32` | Warm white channel (0.0–1.0) |
+    | `HasTransitionLength` / `TransitionLength` | `uint32` | Transition time in milliseconds |
+    | `HasFlashLength` / `FlashLength` | `uint32` | Flash duration in milliseconds |
+    | `HasEffect` / `Effect` | `string` | Named effect (e.g. `"Rainbow"`) |
+  </Tab>
+
+  <Tab title="Climate">
+    **SetClimate** updates one or more properties of a climate entity. Use `Has*` flags to select which fields to change.
+
+    ```go
+    func (c *Client) SetClimate(key uint32, opts ClimateCommandOpts) error
+    ```
+
+    ```go
+    // Set mode to heat and target temperature to 21°C
+    err := client.SetClimate(key, esphome.ClimateCommandOpts{
+        HasMode:              true,
+        Mode:                 pb.ClimateMode_CLIMATE_MODE_HEAT,
+        HasTargetTemperature: true,
+        TargetTemperature:    21.0,
+    })
+    ```
+
+    **ClimateCommandOpts fields:**
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `HasMode` / `Mode` | `pb.ClimateMode` | Operating mode |
+    | `HasTargetTemperature` / `TargetTemperature` | `float32` | Single setpoint |
+    | `HasTargetTemperatureLow` / `TargetTemperatureLow` | `float32` | Lower setpoint (dual-point) |
+    | `HasTargetTemperatureHigh` / `TargetTemperatureHigh` | `float32` | Upper setpoint (dual-point) |
+    | `HasFanMode` / `FanMode` | `pb.ClimateFanMode` | Fan mode preset |
+    | `HasSwingMode` / `SwingMode` | `pb.ClimateSwingMode` | Swing mode |
+    | `HasCustomFanMode` / `CustomFanMode` | `string` | Custom fan mode string |
+    | `HasPreset` / `Preset` | `pb.ClimatePreset` | Climate preset |
+    | `HasCustomPreset` / `CustomPreset` | `string` | Custom preset string |
+    | `HasTargetHumidity` / `TargetHumidity` | `float32` | Target humidity (0–100) |
+
+    **SetNumber** sets the value of a number entity.
+
+    ```go
+    func (c *Client) SetNumber(key uint32, value float32) error
+    ```
+
+    ```go
+    err := client.SetNumber(key, 22.5)
+    ```
+
+    **SetSelect** chooses an option on a select entity.
+
+    ```go
+    func (c *Client) SetSelect(key uint32, value string) error
+    ```
+
+    ```go
+    err := client.SetSelect(key, "auto")
+    ```
+  </Tab>
+
+  <Tab title="Covers & fans">
+    **SetCover** sends a cover command.
+
+    ```go
+    func (c *Client) SetCover(key uint32, opts CoverCommandOpts) error
+    ```
+
+    ```go
+    // Open to 50%
+    err := client.SetCover(key, esphome.CoverCommandOpts{
+        HasPosition: true,
+        Position:    0.5,
+    })
+
+    // Stop movement
+    err := client.SetCover(key, esphome.CoverCommandOpts{Stop: true})
+    ```
+
+    **SetCoverPosition** is a convenience wrapper for setting only the position (0.0 = fully closed, 1.0 = fully open).
+
+    ```go
+    func (c *Client) SetCoverPosition(key uint32, position float32) error
+    ```
+
+    ```go
+    err := client.SetCoverPosition(key, 1.0) // fully open
+    ```
+
+    **CoverCommandOpts fields:**
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `HasPosition` / `Position` | `float32` | Target position (0.0–1.0) |
+    | `HasTilt` / `Tilt` | `float32` | Target tilt (0.0–1.0) |
+    | `Stop` | `bool` | Stop current movement |
+
+    **SetFan** sends a fan command.
+
+    ```go
+    func (c *Client) SetFan(key uint32, opts FanCommandOpts) error
+    ```
+
+    ```go
+    err := client.SetFan(key, esphome.FanCommandOpts{
+        HasState:      true,
+        State:         true,
+        HasSpeedLevel: true,
+        SpeedLevel:    2,
+    })
+    ```
+
+    **FanCommandOpts fields:**
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `HasState` / `State` | `bool` | Power on or off |
+    | `HasOscillating` / `Oscillating` | `bool` | Enable/disable oscillation |
+    | `HasDirection` / `Direction` | `pb.FanDirection` | Rotation direction |
+    | `HasSpeedLevel` / `SpeedLevel` | `int32` | Speed level index |
+    | `HasPresetMode` / `PresetMode` | `string` | Named preset mode |
+  </Tab>
+
+  <Tab title="Media & locks">
+    **SetMediaPlayer** controls a media player entity.
+
+    ```go
+    func (c *Client) SetMediaPlayer(key uint32, opts MediaPlayerCommandOpts) error
+    ```
+
+    ```go
+    // Play a URL
+    err := client.SetMediaPlayer(key, esphome.MediaPlayerCommandOpts{
+        HasMediaUrl: true,
+        MediaUrl:    "http://stream.example.com/audio.mp3",
+    })
+
+    // Set volume to 50%
+    err := client.SetMediaPlayer(key, esphome.MediaPlayerCommandOpts{
+        HasVolume: true,
+        Volume:    0.5,
+    })
+    ```
+
+    **MediaPlayerCommandOpts fields:**
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `HasCommand` / `Command` | `pb.MediaPlayerCommand` | Playback command (play, pause, stop, mute, unmute) |
+    | `HasVolume` / `Volume` | `float32` | Volume level (0.0–1.0) |
+    | `HasMediaUrl` / `MediaUrl` | `string` | URL to play |
+    | `HasAnnouncement` / `Announcement` | `bool` | Treat as announcement (TTS) |
+
+    **SetSiren** controls a siren entity.
+
+    ```go
+    func (c *Client) SetSiren(key uint32, opts SirenCommandOpts) error
+    ```
+
+    ```go
+    err := client.SetSiren(key, esphome.SirenCommandOpts{
+        HasState:    true,
+        State:       true,
+        HasTone:     true,
+        Tone:        "alarm",
+        HasDuration: true,
+        Duration:    5000, // milliseconds
+    })
+    ```
+
+    **SirenCommandOpts fields:**
+
+    | Field | Type | Description |
+    |---|---|---|
+    | `HasState` / `State` | `bool` | On or off |
+    | `HasTone` / `Tone` | `string` | Named tone |
+    | `HasDuration` / `Duration` | `uint32` | Duration in milliseconds |
+    | `HasVolume` / `Volume` | `float32` | Volume level (0.0–1.0) |
+
+    **SetLock** sends a lock or unlock command. Pass a non-empty `code` for devices that require a PIN.
+
+    ```go
+    func (c *Client) SetLock(key uint32, command pb.LockCommand, code string) error
+    ```
+
+    ```go
+    // Lock without a code
+    err := client.SetLock(key, pb.LockCommand_LOCK_LOCK, "")
+
+    // Unlock with a PIN code
+    err := client.SetLock(key, pb.LockCommand_LOCK_UNLOCK, "1234")
+
+    // Open (if SupportsOpen is true)
+    err := client.SetLock(key, pb.LockCommand_LOCK_OPEN, "")
+    ```
+  </Tab>
+</Tabs>

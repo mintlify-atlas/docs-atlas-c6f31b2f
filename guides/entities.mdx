@@ -1,0 +1,167 @@
+---
+title: "Working with entities"
+description: "Discover and query ESPHome entities using the entity registry"
+---
+
+ESPHome exposes all platform components — sensors, switches, lights, climate units, covers, and more — as **entities**. Each entity has a stable numeric key, a name, an object ID, and a domain that identifies its type. The client maintains an `EntityRegistry` that caches entity metadata and the most recent state for each entity.
+
+## Listing entities
+
+Call `ListEntities()` after connecting to fetch all entity definitions from the device. The registry is populated automatically as responses arrive.
+
+```go
+entities, err := client.ListEntities()
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("discovered %d entities\n", len(entities))
+```
+
+After `ListEntities` returns, the registry is available through `client.Entities()`:
+
+```go
+registry := client.Entities()
+```
+
+## Accessing entities by type
+
+The registry provides typed accessor methods that return slices of entity structs for each domain.
+
+<Tabs>
+  <Tab title="Sensors">
+    ```go
+    for _, s := range client.Entities().Sensors() {
+        fmt.Printf("sensor: %s  unit=%s  class=%s\n",
+            s.Name, s.UnitOfMeasurement, s.DeviceClass)
+    }
+    ```
+  </Tab>
+  <Tab title="Binary sensors">
+    ```go
+    for _, s := range client.Entities().BinarySensors() {
+        fmt.Printf("binary_sensor: %s  class=%s\n", s.Name, s.DeviceClass)
+    }
+    ```
+  </Tab>
+  <Tab title="Switches">
+    ```go
+    for _, s := range client.Entities().Switches() {
+        fmt.Printf("switch: %s  state=%v\n", s.Name, s.State)
+    }
+    ```
+  </Tab>
+  <Tab title="Lights">
+    ```go
+    for _, l := range client.Entities().Lights() {
+        fmt.Printf("light: %s  on=%v  brightness=%.2f\n",
+            l.Name, l.State, l.Brightness)
+    }
+    ```
+  </Tab>
+  <Tab title="Climate">
+    ```go
+    for _, c := range client.Entities().Climates() {
+        fmt.Printf("climate: %s  mode=%v  temp=%.1f\n",
+            c.Name, c.Mode, c.CurrentTemperature)
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Looking up an entity by key
+
+`ByKey` performs a unified lookup across all domains and returns the `Entity` interface, or `nil` if not found.
+
+```go
+entity := client.Entities().ByKey(0x12345678)
+if entity != nil {
+    fmt.Printf("%s (%s)\n", entity.GetName(), entity.GetDomain())
+}
+```
+
+You can also look up by name:
+
+```go
+entity := client.Entities().ByName("temperature_sensor")
+```
+
+## The Entity interface
+
+Every entity type implements the `Entity` interface:
+
+```go
+type Entity interface {
+    GetKey()      uint32
+    GetName()     string
+    GetObjectID() string
+    GetDomain()   EntityDomain
+}
+```
+
+`GetDomain()` returns an `EntityDomain` constant whose `String()` method produces the ESPHome domain name (e.g. `"sensor"`, `"binary_sensor"`).
+
+## SensorEntity fields
+
+`SensorEntity` exposes both metadata from `ListEntities` and cached state from the most recent `SensorStateResponse`:
+
+| Field | Type | Description |
+|---|---|---|
+| `Key` | `uint32` | Stable entity identifier |
+| `Name` | `string` | Human-readable name |
+| `ObjectID` | `string` | Entity object ID |
+| `UnitOfMeasurement` | `string` | e.g. `"°C"`, `"%"`, `"hPa"` |
+| `DeviceClass` | `string` | e.g. `"temperature"`, `"humidity"` |
+| `StateClass` | `pb.SensorStateClass` | Measurement, total, or total increasing |
+| `AccuracyDecimals` | `int32` | Display precision |
+| `State` | `float32` | Latest received value |
+| `MissingState` | `bool` | True until the first state is received |
+
+## Entity domains
+
+The library defines 16 entity domains:
+
+| Constant | Domain string | Registry accessor | List response type |
+|---|---|---|---|
+| `DomainSensor` | `sensor` | `Sensors()` | `*pb.ListEntitiesSensorResponse` |
+| `DomainBinarySensor` | `binary_sensor` | `BinarySensors()` | `*pb.ListEntitiesBinarySensorResponse` |
+| `DomainCover` | `cover` | `Covers()` | `*pb.ListEntitiesCoverResponse` |
+| `DomainFan` | `fan` | `Fans()` | `*pb.ListEntitiesFanResponse` |
+| `DomainLight` | `light` | `Lights()` | `*pb.ListEntitiesLightResponse` |
+| `DomainSwitch` | `switch` | `Switches()` | `*pb.ListEntitiesSwitchResponse` |
+| `DomainTextSensor` | `text_sensor` | `TextSensors()` | `*pb.ListEntitiesTextSensorResponse` |
+| `DomainCamera` | `camera` | `Cameras()` | `*pb.ListEntitiesCameraResponse` |
+| `DomainClimate` | `climate` | `Climates()` | `*pb.ListEntitiesClimateResponse` |
+| `DomainNumber` | `number` | `Numbers()` | `*pb.ListEntitiesNumberResponse` |
+| `DomainSelect` | `select` | `Selects()` | `*pb.ListEntitiesSelectResponse` |
+| `DomainSiren` | `siren` | `Sirens()` | `*pb.ListEntitiesSirenResponse` |
+| `DomainLock` | `lock` | `Locks()` | `*pb.ListEntitiesLockResponse` |
+| `DomainButton` | `button` | `Buttons()` | `*pb.ListEntitiesButtonResponse` |
+| `DomainMediaPlayer` | `media_player` | `MediaPlayers()` | `*pb.ListEntitiesMediaPlayerResponse` |
+| `DomainWaterHeater` | `water_heater` | `WaterHeaters()` | `*pb.ListEntitiesWaterHeaterResponse` |
+
+## EntityRegistry methods
+
+```go
+registry := client.Entities()
+
+registry.ByKey(key uint32) Entity           // look up any entity by key
+registry.ByName(name string) Entity         // look up any entity by name
+registry.Len() int                          // total number of entities
+
+registry.Sensors() []*SensorEntity
+registry.BinarySensors() []*BinarySensorEntity
+registry.Switches() []*SwitchEntity
+registry.Lights() []*LightEntity
+registry.Covers() []*CoverEntity
+registry.Fans() []*FanEntity
+registry.Climates() []*ClimateEntity
+registry.Numbers() []*NumberEntity
+registry.Selects() []*SelectEntity
+registry.Sirens() []*SirenEntity
+registry.Locks() []*LockEntity
+registry.Buttons() []*ButtonEntity
+registry.MediaPlayers() []*MediaPlayerEntity
+registry.TextSensors() []*TextSensorEntity
+registry.Cameras() []*CameraEntity
+registry.WaterHeaters() []*WaterHeaterEntity
+```
